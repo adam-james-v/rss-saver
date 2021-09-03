@@ -43,23 +43,14 @@
       zip/xml-zip
       (get-nodes match-entry?)))
 
-(defn get-previous-entries
-  []
-  (when (.exists (io/file "previous-feed.atom"))
-    (feed-str->entries (slurp "previous-feed.atom"))))
-
-(defn get-current-entries
-  [url]
-  (feed-str->entries (slurp url)))
-
 (defn entry->html
+  "Converts a parsed XML entry node into an html document."
   [entry]
-  (let [{:keys [content]} entry
-        content (remove string? content)
+  (let [content (filter map? (:content entry))
         content-map (zipmap (map :tag content)
                             (map #(first (:content %)) content))]
-    [(:id content-map)
-     (format "
+    {:id (:id content-map)
+     :post (format "
 <html>
   <head>
     <Title>%s</Title>
@@ -71,11 +62,11 @@
     %s
   </body>
 </html>"
-             (:title content-map)
-             (:title content-map)
-             (:published content-map)
-             (:updated content-map)
-             (:content content-map))]))
+                   (:title content-map)
+                   (:title content-map)
+                   (:published content-map)
+                   (:updated content-map)
+                   (:content content-map))}))
 
 (def cwd (.getCanonicalPath (io/file ".")))
 
@@ -86,7 +77,7 @@
     :default (str cwd "/posts")]
    ["-c" "--clear" "Clear the cached copy of the previous feed."]])
 
-(defn main
+(defn -main
   [& args]
   (let [parsed (cli/parse-opts args cli-options)
         opts (:options parsed)]
@@ -98,19 +89,21 @@
       (println "Please specify feed URL.")
 
       :else
-      (let [cur-str (slurp (:url opts)) ;; TODO: fix so that URL is only slurped once
-            prev (get-previous-entries)
-            cur (get-current-entries (:url opts))
+      (let [cur-str (slurp (:url opts))
+            prev-str (when (.exists (io/file "previous-feed.atom"))
+                       (slurp "previous-feed.atom"))
+            prev (when prev-str (feed-str->entries prev-str))
+            cur (feed-str->entries cur-str)
             entries (remove (into #{} prev) cur)]
         (println (str "Handling " (count entries) " entries."))
         (sh "mkdir" "-p" (:dir opts))
         (into []
-              (for [[id post] (mapv entry->html entries)]
+              (for [{:keys [id post]} (mapv entry->html entries)]
                 (let [fname (str
                              (:dir opts) "/"
                              (second (str/split id #"/")) ".html")]
                   (spit fname post))))
         (spit "previous-feed.atom" cur-str)))))
 
-(apply main *command-line-args*)
+(apply -main *command-line-args*)
 (shutdown-agents)
