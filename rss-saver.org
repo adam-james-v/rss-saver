@@ -1,0 +1,170 @@
+* rss-saver
+A script that saves my blog posts from [[https://world.hey.com/adam.james/]]
+
+** readme
+#+begin_src markdown :tangle ./readme.md
+# RSS-saver
+A simple Clojure (Babashka) script to save world@hey.com blog posts locally.
+
+I use hey.com's blog feature to write blog posts to help me clarify and improve my own thinking about life, design, and programming. It's a cool feature to a nice service, but I worry that I may not be able to retrieve my posts in the event of service shutdown, or if I move on to another email provider in the future.
+
+This script is meant to be run automatically every night (or so). It downloads the feed.atom xml file from the provided URL, checks for any changes from the previous download, and saves new entries.
+
+## Status
+Working 'skeleton'. I wrote this during one of my streams, and it works with my (hardcoded) blog RSS URL. I have to clean up the node transformation and open up the feature set slightly yet, including:
+
+ - option to change the feed URL to other hey URLs. I am NOT worrying about other RSS feed formats at this time. Not sure if they are standardised anyway.
+ - add a few output options: .txt, .md, .org, .html ?? Not entirely sure which yet.
+ - make a proper CLI w/ help printout
+ - make sure a GraalVM native-image build is possible
+
+#+end_src
+
+* What is RSS?
+I've never properly learned what RSS actually is. Here's my RSS link that I'll be using:
+
+[[https://world.hey.com/adam.james/feed.atom]]
+
+I assume that the atom file at that address is automatically updated any time a post is created, and I assume it's just XML with all of the blog's content.
+
+What I think RSS does:
+
+Every time the site updates, the feed.atom file is re-generated with the newest content appended. Then, the RSS reader is a separate app that polls feed.atom URLs, downloads them, and parses/displays the contents according to the app's design.
+
+* Design
+This is a simple script that only saves my world.hey.com blog posts to text files. Run the script once, it will grab feed.atom from the URL, parse it, and save each post and its content as plaintext.
+
+To expand that minimal scope, I want:
+
+- basic diffing approach which saves the previous feed.atom file so that when the script runs, it can compare the newest feed from the previous, and only saves new articles.
+- some articles have images, I would like to be able to download those images and save them inside a folder generated per post.
+- I want to emit the posts in either markdown OR org files, not sure yet.
+
+* main
+** ns
+Need xml parsing. Might need to build a zipper to edit nodes.
+
+I'll want to run it as a CLI, and probably want to turn the project into another GRAALVM native image example, so I'll need tools.cli as well.
+
+#+begin_src clojure :tangle ./rss-saver.clj
+(ns rss-saver.main
+  (:require [clojure.string :as str]
+            [clojure.data.xml :as xml]
+            [clojure.java.io :as io]
+            [clojure.zip :as zip]
+            [clojure.java.shell :as sh :refer [sh]]
+            [clojure.tools.cli :as cli]))
+
+#+end_src
+
+** get-feed
+#+begin_src clojure :tangle ./rss-saver.clj
+(def feed-url "https://world.hey.com/adam.james/feed.atom")
+(def current-feed-str (slurp feed-url))
+
+(defn init-previous!
+  "Saves current-feed-str to previous-feed.atom when no previous-feed.atom file exists."
+  []
+  (when-not (.exists (io/file "previous-feed.atom"))
+    (spit "previous-feed.atom" "")))
+
+(init-previous!)
+
+(def previous-feed-str (slurp "previous-feed.atom"))
+
+#+end_src
+
+** zipper tools
+#+begin_src clojure :tangle ./rss-saver.clj
+;; https://ravi.pckl.me/short/functional-xml-editing-using-zippers-in-clojure/
+(defn tree-edit
+  [zipper matcher editor]
+  (loop [loc zipper]
+    (if (zip/end? loc)
+      (zip/root loc)
+      (if-let [matcher-result (matcher loc)]
+        (let [new-loc (zip/edit loc editor)]
+          (if (not (= (zip/node new-loc) (zip/node loc)))
+            (recur (zip/next new-loc))
+            (recur (zip/next loc))))
+        (recur (zip/next loc))))))
+
+(defn get-nodes
+  [zipper matcher]
+  (loop [loc zipper
+         acc []]
+    (if (zip/end? loc)
+      acc
+      (if (matcher loc)
+        (recur (zip/next loc) (conj acc (zip/node loc)))
+        (recur (zip/next loc) acc)))))
+
+(defn match-entry?
+  [loc]
+  (let [node (zip/node loc)
+        {:keys [tag]} node]
+    (= tag :entry)))
+
+#+end_src
+
+** entry nodes
+#+begin_src clojure :tangle ./rss-saver.clj
+(def current-entries
+  (-> current-feed-str
+      (xml/parse-str {:namespace-aware false})
+      zip/xml-zip
+      (get-nodes match-entry?)))
+
+(def previous-entries
+  (when-not (= "" previous-feed-str)
+    (-> previous-feed-str
+        (xml/parse-str {:namespace-aware false})
+        zip/xml-zip
+        (get-nodes match-entry?))))
+
+(def entries
+  (remove (into #{} previous-entries) current-entries))
+#+end_src
+
+** node-transform
+#+begin_src clojure :tangle ./rss-saver.clj
+(defn entry->html
+  [entry]
+  (let [{:keys [content]} entry
+        content (remove string? content)
+        content-map (zipmap (map :tag content)
+                            (map #(first (:content %)) content))]
+    [(:id content-map)
+     (format "
+<html>
+  <head>
+    <Title>%s</Title>
+  </head>
+  <body>
+    <h1>%s</h1>
+    <h4>Published: %s</h4>
+    <h4>Updated: %s</h4>
+    %s
+  </body>
+</html>"
+             (:title content-map)
+             (:title content-map)
+             (:published content-map)
+             (:updated content-map)
+             (:content content-map))]))
+#+end_src
+
+** CLI
+#+begin_src clojure :tangle ./rss-saver.clj
+(defn main
+  []
+  (println (str "Handling " (count entries) " entries."))
+  (sh "mkdir" "-p" "posts")
+  (into []
+        (for [[id post] (mapv entry->html entries)]
+          (let [fname (str "posts/" (second (str/split id #"/")) ".html")]
+            (spit fname post))))
+  (spit "previous-feed.atom" current-feed-str))
+
+(main)
+#+end_src
