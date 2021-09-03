@@ -125,8 +125,7 @@
     (str/join " " s)))
 
 (defn entry->html
-  "Converts a parsed XML entry node into an html document.
-  The generated html string does not reformat the html from the feed."
+  "Converts a parsed XML entry node into an html document."
   [entry]
   (let [entry (normalize-entry entry)]
     {:id (:id entry)
@@ -155,13 +154,77 @@
                    (:title entry)
                    (clean-html (:content entry)))}))
 
+(defn xml->hiccup
+  [xml]
+  (if-let [t (:tag xml)]
+    (let [elem [t]
+          elem (if-let [attrs (:attrs xml)]
+                 (conj elem attrs)
+                 elem)]
+      (into elem (map xml->hiccup (:content xml))))
+    xml))
 
+(def tag-str
+  {:h1 "# "
+   :h2 "## "
+   :h3 "### "
+   :h4 "#### "
+   :h5 "##### "
+   :h6 "###### "
+   :p ""
+   :div ""
+   :br "\n"
+   :img "IMAGE"
+   :ul ""
+   :li "\n - "})
+
+(defn xml->str
+  [xml]
+  (if-let [t (:tag xml)]
+    (let [elem-start (if (t tag-str) (t tag-str) "")]
+      (apply str (concat
+                  [elem-start]
+                  (mapv xml->str (:content xml)))))
+    xml))
+
+(defn html-str->markdown
+  "Parses and converts an html string to markdown."
+  [s]
+  (-> s
+      (xml/parse-str {:namespace-aware false})
+      xml->str))
+
+(defn entry->markdown
+  "Converts a parsed XML entry node into a markdown document."
+  [entry]
+  (let [entry (normalize-entry entry)]
+    {:id (:id entry)
+     :post (format "
+name: %s
+email: %s
+published: %s
+updated: %s
+link: [%s](%s)
+
+# %s
+
+%s"
+                   (:name entry)
+                   (:email entry)
+                   (readable-date (:published entry))
+                   (readable-date (:updated entry))
+                   (:link entry)
+                   (:link entry)
+                   (:title entry)
+                   (-> entry :content clean-html html-str->markdown))}))
 
 (def cli-options
   [["-h" "--help"]
    ["-u" "--url URL" "The URL of the RSS feed you want to save."]
    ["-d" "--dir DIR" "The directory where articles will be saved."
     :default "./posts"]
+   ["-f" "--format FORMAT" "The format of saved articles. Either 'html' or 'md' for markdown, defaulting to html if unspecified."
+    :default "html"]
    ["-c" "--clear" "Clear the cached copy of the previous feed."]])
 
 (defn clear!
@@ -171,7 +234,9 @@
 
 (defn save!
   [opts]
-  (let [cur-str (slurp (:url opts))
+  (let [save-fn (get {"html" entry->html
+                      "md" entry->markdown} (:format opts))
+        cur-str (slurp (:url opts))
         prev-fname (str (:dir opts) "/" "previous-feed.atom")
         prev-str (when (.exists (io/file prev-fname))
                    (slurp prev-fname))
@@ -182,10 +247,11 @@
       (do
         (println (str "Handling " (count entries) " entries."))
         (sh "mkdir" "-p" (:dir opts))
-        (doseq [{:keys [id post]} (mapv entry->html entries)]
+        (doseq [{:keys [id post]} (mapv save-fn entries)]
           (let [fname (str
                        (:dir opts) "/"
-                       (second (str/split id #"/")) ".html")]
+                       (second (str/split id #"/")) "."
+                       (:format opts))]
             (spit fname post)))
         (spit prev-fname cur-str))
       (println "No changes found in feed."))))
