@@ -43,30 +43,66 @@
       zip/xml-zip
       (get-nodes match-entry?)))
 
-(defn entry->html
-  "Converts a parsed XML entry node into an html document."
+(defn normalize-entry
+  "Normalizes the entry node by flattening content into a map."
   [entry]
   (let [content (filter map? (:content entry))
-        content-map (zipmap (map :tag content)
-                            (map #(first (:content %)) content))]
-    {:id (:id content-map)
+        f (fn [{:keys [tag content] :as node}]
+            (let [val (cond (= tag :link) (get-in node [:attrs :href])
+                            :else (first content))]
+                {tag val}))
+        author-map (->> content
+                        (filter #(= (:tag %) :author))
+                        first :content
+                        (filter map?)
+                        (map f)
+                        (apply merge))]
+   (apply merge (conj
+                 (map f (remove #(= (:tag %) :author) content))
+                 author-map))))
+
+(defn readable-date
+  [s]
+  (as-> s s
+    (str/split s #"[a-zA-Z]")
+    (str/join " " s)))
+
+(defn entry->html
+  "Converts a parsed XML entry node into an html document.
+  The generated html string does not reformat the html from the feed."
+  [entry]
+  (let [entry (normalize-entry entry)]
+    {:id (:id entry)
      :post (format "
-<html>
+<!DOCTYPE html>
+<html lang=\"en\">
   <head>
-    <Title>%s</Title>
+    <meta charset=\"utf-8\"/>
+    <title>%s</title>
   </head>
   <body>
-    <h1>%s</h1>
-    <h4>Published: %s</h4>
-    <h4>Updated: %s</h4>
+    <p><strong>Author:</strong> %s</p>
+    <p><strong>email:</strong> %s</p>
+    <p><strong>Published:</strong> %s</p>
+    <p><strong>Updated:</strong> %s</p>
+    <a href=\"%s\"><h1>%s</h1></a>
     %s
   </body>
 </html>"
-                   (:title content-map)
-                   (:title content-map)
-                   (:published content-map)
-                   (:updated content-map)
-                   (:content content-map))}))
+                   (:title entry)
+                   (:name entry)
+                   (:email entry)
+                   (readable-date (:published entry))
+                   (readable-date (:updated entry))
+                   (:link entry)
+                   (:title entry)
+                   (:content entry))}))
+
+(defn clean-html
+  "Clean up the html string from the feed."
+  [s]
+  (let [s (str/replace s "<br>" "<br></br>")]
+    (xml/parse-str s)))
 
 (def cli-options
   [["-h" "--help"]
