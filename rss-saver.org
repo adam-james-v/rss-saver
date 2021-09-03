@@ -11,7 +11,7 @@ I use hey.com's blog feature to write blog posts to help me clarify and improve 
 This script is meant to be run automatically every night (or so). It downloads the feed.atom xml file from the provided URL, checks for any changes from the previous download, and saves new entries.
 
 ## Status
-Working 'skeleton'. I wrote this during one of my streams, and it works with my (hardcoded) blog RSS URL. I have to clean up the node transformation and open up the feature set slightly yet, including:
+Working 'skeleton'. I wrote this during one of my streams, and it works with my (hardcoded) blog RSS URL. I have to clean up the node transformation and open up the feature set slightly:
 
  - option to change the feed URL to other hey URLs. I am NOT worrying about other RSS feed formats at this time. Not sure if they are standardised anyway.
  - add a few output options: .txt, .md, .org, .html ?? Not entirely sure which yet.
@@ -57,8 +57,10 @@ I'll want to run it as a CLI, and probably want to turn the project into another
 
 #+end_src
 
-** get-feed
-#+begin_src clojure :tangle ./rss-saver.clj
+** get-feed-proto
+This is not part of the final script, but was useful for the skeleton script.
+
+#+begin_src clojure
 (def feed-url "https://world.hey.com/adam.james/feed.atom")
 (def current-feed-str (slurp feed-url))
 
@@ -109,24 +111,26 @@ I'll want to run it as a CLI, and probably want to turn the project into another
 
 ** entry nodes
 #+begin_src clojure :tangle ./rss-saver.clj
-(def current-entries
-  (-> current-feed-str
+(defn feed-str->entries
+  "Returns a sequence of parsed article entry nodes from an XML feed string."
+  [s]
+  (-> s
       (xml/parse-str {:namespace-aware false})
       zip/xml-zip
       (get-nodes match-entry?)))
 
-(def previous-entries
-  (when-not (= "" previous-feed-str)
-    (-> previous-feed-str
-        (xml/parse-str {:namespace-aware false})
-        zip/xml-zip
-        (get-nodes match-entry?))))
+(defn get-previous-entries
+  []
+  (when (.exists (io/file "previous-feed.atom"))
+    (feed-str->entries (slurp "previous-feed.atom"))))
 
-(def entries
-  (remove (into #{} previous-entries) current-entries))
+(defn get-current-entries
+  [url]
+  (feed-str->entries (slurp url)))
+
 #+end_src
 
-** node-transform
+** node-transforms
 #+begin_src clojure :tangle ./rss-saver.clj
 (defn entry->html
   [entry]
@@ -152,19 +156,46 @@ I'll want to run it as a CLI, and probably want to turn the project into another
              (:published content-map)
              (:updated content-map)
              (:content content-map))]))
+
 #+end_src
 
 ** CLI
 #+begin_src clojure :tangle ./rss-saver.clj
-(defn main
-  []
-  (println (str "Handling " (count entries) " entries."))
-  (sh "mkdir" "-p" "posts")
-  (into []
-        (for [[id post] (mapv entry->html entries)]
-          (let [fname (str "posts/" (second (str/split id #"/")) ".html")]
-            (spit fname post))))
-  (spit "previous-feed.atom" current-feed-str))
+(def cwd (.getCanonicalPath (io/file ".")))
 
-(main)
+(def cli-options
+  [["-h" "--help"]
+   ["-u" "--url URL" "The URL of the RSS feed you want to save."]
+   ["-d" "--dir DIR" "The directory where articles will be saved."
+    :default (str cwd "/posts")]
+   ["-c" "--clear" "Clear the cached copy of the previous feed."]])
+
+(defn main
+  [& args]
+  (let [parsed (cli/parse-opts args cli-options)
+        opts (:options parsed)]
+    (cond
+      (:help opts)
+      (println (str "Usage:" "\n" (:summary parsed)))
+
+      (nil? (:url opts))
+      (println "Please specify feed URL.")
+
+      :else
+      (let [cur-str (slurp (:url opts)) ;; TODO: fix so that URL is only slurped once
+            prev (get-previous-entries)
+            cur (get-current-entries (:url opts))
+            entries (remove (into #{} prev) cur)]
+        (println (str "Handling " (count entries) " entries."))
+        (sh "mkdir" "-p" (:dir opts))
+        (into []
+              (for [[id post] (mapv entry->html entries)]
+                (let [fname (str
+                             (:dir opts) "/"
+                             (second (str/split id #"/")) ".html")]
+                  (spit fname post))))
+        (spit "previous-feed.atom" cur-str)))))
+
+(apply main *command-line-args*)
+(shutdown-agents)
 #+end_src

@@ -6,7 +6,7 @@ I use hey.com's blog feature to write blog posts to help me clarify and improve 
 This script is meant to be run automatically every night (or so). It downloads the feed.atom xml file from the provided URL, checks for any changes from the previous download, and saves new entries.
 
 ## Status
-Working 'skeleton'. I wrote this during one of my streams, and it works with my (hardcoded) blog RSS URL. I have to clean up the node transformation and open up the feature set slightly yet, including:
+Working 'skeleton'. I wrote this during one of my streams, and it works with my (hardcoded) blog RSS URL. I have to clean up the node transformation and open up the feature set slightly:
 
  - option to change the feed URL to other hey URLs. I am NOT worrying about other RSS feed formats at this time. Not sure if they are standardised anyway.
  - add a few output options: .txt, .md, .org, .html ?? Not entirely sure which yet.

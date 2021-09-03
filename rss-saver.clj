@@ -6,19 +6,6 @@
             [clojure.java.shell :as sh :refer [sh]]
             [clojure.tools.cli :as cli]))
 
-(def feed-url "https://world.hey.com/adam.james/feed.atom")
-(def current-feed-str (slurp feed-url))
-
-(defn init-previous!
-  "Saves current-feed-str to previous-feed.atom when no previous-feed.atom file exists."
-  []
-  (when-not (.exists (io/file "previous-feed.atom"))
-    (spit "previous-feed.atom" "")))
-
-(init-previous!)
-
-(def previous-feed-str (slurp "previous-feed.atom"))
-
 ;; https://ravi.pckl.me/short/functional-xml-editing-using-zippers-in-clojure/
 (defn tree-edit
   [zipper matcher editor]
@@ -48,21 +35,22 @@
         {:keys [tag]} node]
     (= tag :entry)))
 
-(def current-entries
-  (-> current-feed-str
+(defn feed-str->entries
+  "Returns a sequence of parsed article entry nodes from an XML feed string."
+  [s]
+  (-> s
       (xml/parse-str {:namespace-aware false})
       zip/xml-zip
       (get-nodes match-entry?)))
 
-(def previous-entries
-  (when-not (= "" previous-feed-str)
-    (-> previous-feed-str
-        (xml/parse-str {:namespace-aware false})
-        zip/xml-zip
-        (get-nodes match-entry?))))
+(defn get-previous-entries
+  []
+  (when (.exists (io/file "previous-feed.atom"))
+    (feed-str->entries (slurp "previous-feed.atom"))))
 
-(def entries
-  (remove (into #{} previous-entries) current-entries))
+(defn get-current-entries
+  [url]
+  (feed-str->entries (slurp url)))
 
 (defn entry->html
   [entry]
@@ -89,14 +77,40 @@
              (:updated content-map)
              (:content content-map))]))
 
-(defn main
-  []
-  (println (str "Handling " (count entries) " entries."))
-  (sh "mkdir" "-p" "posts")
-  (into []
-        (for [[id post] (mapv entry->html entries)]
-          (let [fname (str "posts/" (second (str/split id #"/")) ".html")]
-            (spit fname post))))
-  (spit "previous-feed.atom" current-feed-str))
+(def cwd (.getCanonicalPath (io/file ".")))
 
-(main)
+(def cli-options
+  [["-h" "--help"]
+   ["-u" "--url URL" "The URL of the RSS feed you want to save."]
+   ["-d" "--dir DIR" "The directory where articles will be saved."
+    :default (str cwd "/posts")]
+   ["-c" "--clear" "Clear the cached copy of the previous feed."]])
+
+(defn main
+  [& args]
+  (let [parsed (cli/parse-opts args cli-options)
+        opts (:options parsed)]
+    (cond
+      (:help opts)
+      (println (str "Usage:" "\n" (:summary parsed)))
+
+      (nil? (:url opts))
+      (println "Please specify feed URL.")
+
+      :else
+      (let [cur-str (slurp (:url opts)) ;; TODO: fix so that URL is only slurped once
+            prev (get-previous-entries)
+            cur (get-current-entries (:url opts))
+            entries (remove (into #{} prev) cur)]
+        (println (str "Handling " (count entries) " entries."))
+        (sh "mkdir" "-p" (:dir opts))
+        (into []
+              (for [[id post] (mapv entry->html entries)]
+                (let [fname (str
+                             (:dir opts) "/"
+                             (second (str/split id #"/")) ".html")]
+                  (spit fname post))))
+        (spit "previous-feed.atom" cur-str)))))
+
+(apply main *command-line-args*)
+(shutdown-agents)
