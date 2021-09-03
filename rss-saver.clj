@@ -7,7 +7,7 @@
             [clojure.tools.cli :as cli]))
 
 ;; https://ravi.pckl.me/short/functional-xml-editing-using-zippers-in-clojure/
-(defn tree-edit
+(defn edit-nodes
   [zipper matcher editor]
   (loop [loc zipper]
     (if (zip/end? loc)
@@ -17,6 +17,16 @@
           (if (not (= (zip/node new-loc) (zip/node loc)))
             (recur (zip/next new-loc))
             (recur (zip/next loc))))
+        (recur (zip/next loc))))))
+
+(defn remove-nodes
+  [zipper matcher]
+  (loop [loc zipper]
+    (if (zip/end? loc)
+      (zip/root loc)
+      (if-let [matcher-result (matcher loc)]
+        (let [new-loc (zip/remove loc)]
+          (recur (zip/next new-loc)))
         (recur (zip/next loc))))))
 
 (defn get-nodes
@@ -61,6 +71,53 @@
                  (map f (remove #(= (:tag %) :author) content))
                  author-map))))
 
+(defn match-tag
+  [k]
+  (fn
+    [loc]
+    (let [node (zip/node loc)
+          {:keys [tag]} node]
+      (= tag k))))
+
+(defn wrap-strs-in-p-tags
+  [node]
+  (let [f (fn [item]
+            (if (string? item)
+              {:tag :p :attrs {} :content [item]}
+              item))
+        new-content (->> node
+                         :content
+                         (map f))]
+    (assoc node :content new-content)))
+
+(defn convert-to-p-tag
+  [node]
+  (assoc node :tag :p))
+
+(defn unwrap-img-from-figure
+  [node]
+  (let [img-node (-> node
+                 zip/xml-zip
+                 (get-nodes (match-tag :img))
+                 first)
+        new-attrs (-> img-node
+                      :attrs
+                      (dissoc :srcset :decoding :loading))]
+    (assoc img-node :attrs new-attrs)))
+
+(defn clean-html
+  "Clean up the html string from the feed."
+  [s]
+  (let [s (-> s
+              (str/replace "<br>" "<br></br>")
+              (str/replace #"<img[\w\W]+?>" #(str %1 "</img>")))]
+    (-> s
+        (xml/parse-str {:namespace-aware false})
+        zip/xml-zip
+        (edit-nodes (match-tag :figure) unwrap-img-from-figure)
+        xml/emit-str
+        (str/replace #"<\?xml[\w\W]+?>" ""))))
+
 (defn readable-date
   [s]
   (as-> s s
@@ -96,13 +153,9 @@
                    (readable-date (:updated entry))
                    (:link entry)
                    (:title entry)
-                   (:content entry))}))
+                   (clean-html (:content entry)))}))
 
-(defn clean-html
-  "Clean up the html string from the feed."
-  [s]
-  (let [s (str/replace s "<br>" "<br></br>")]
-    (xml/parse-str s)))
+
 
 (def cli-options
   [["-h" "--help"]
