@@ -4,7 +4,8 @@
             [clojure.java.io :as io]
             [clojure.zip :as zip]
             [clojure.java.shell :as sh :refer [sh]]
-            [clojure.tools.cli :as cli]))
+            [clojure.tools.cli :as cli]
+            [hiccup.core :refer [html]]))
 
 ;; https://ravi.pckl.me/short/functional-xml-editing-using-zippers-in-clojure/
 (defn edit-nodes
@@ -118,6 +119,92 @@
         xml/emit-str
         (str/replace #"<\?xml[\w\W]+?>" ""))))
 
+(defmulti node->hiccup
+  (fn [node]
+    (cond
+      (map? node) (:tag node)
+      (and (seqable? node) (not (string? node))) :list
+      :else :string)))
+
+(defmethod node->hiccup :string
+  [node]
+  (when-not (= (str/trim node) "") node))
+
+(defn inline-elem? [item] (when (#{:em :strong} (first item)) true))
+(defn inline? [item] (or (string? item) (inline-elem? item)))
+
+(defn group-inline
+  [list]
+  (let [groups (partition-by inline? list)
+        f (fn [list]
+            (let [f (fn [[a b c]]
+                      (cond
+                        (and (string? a)
+                             (inline-elem? b)
+                             (string? c))
+                        [:p a b c]
+                        
+                        :else
+                        a))]
+              (map f (partition-all 3 1 list))))]
+    (->> groups
+         (map f))))
+
+(defn de-dupe
+  [list]
+  (->> list
+       (partition-by identity)
+       (map first)))
+
+(defn selective-flatten
+  ([l] (selective-flatten [] l))
+  ([acc l]
+   (if (seq l)
+     (let [item (first l)
+           xacc (if (or (string? item)
+                        (and (vector? item) (keyword? (first item))))
+                 (conj acc item)
+                 (into [] (concat acc (selective-flatten item))))]
+       (recur xacc (rest l)))
+     (apply list acc))))
+
+(defmethod node->hiccup :list
+  [node]
+  (->> node
+       (map node->hiccup)
+       (remove nil?)
+       de-dupe
+       selective-flatten))
+
+(defmethod node->hiccup :div [node] (node->hiccup (:content node)))
+
+#_(defmethod node->hiccup :img
+  [{:keys [tag attrs]}]
+  [tag attrs])
+
+(defmethod node->hiccup :default
+  [{:keys [tag attrs content]}]
+  [tag attrs (node->hiccup content)])
+
+#_(defmethod node->hiccup :br [node] [:br])
+
+(defn html-str->hiccup
+  "Parses and converts an html string to markdown."
+  [s]
+  (-> s
+      (xml/parse-str {:namespace-aware false})
+      node->hiccup))
+
+(defn entry->hiccup
+  "Converts a parsed XML entry node into a Hiccup data structure."
+  [entry]
+  (let [entry (normalize-entry entry)]
+    {:id (:id entry)
+     :post (->> entry :content
+                clean-html
+                html-str->hiccup
+                #_selective-flatten)}))
+
 (defn readable-date
   [s]
   (as-> s s
@@ -127,96 +214,30 @@
 (defn entry->html
   "Converts a parsed XML entry node into an html document."
   [entry]
-  (let [entry (normalize-entry entry)]
-    {:id (:id entry)
-     :post (format "
-<!DOCTYPE html>
-<html lang=\"en\">
-  <head>
-    <meta charset=\"utf-8\"/>
-    <title>%s</title>
-  </head>
-  <body>
-    <p><strong>Author:</strong> %s</p>
-    <p><strong>email:</strong> %s</p>
-    <p><strong>Published:</strong> %s</p>
-    <p><strong>Updated:</strong> %s</p>
-    <a href=\"%s\"><h1>%s</h1></a>
-    %s
-  </body>
-</html>"
-                   (:title entry)
-                   (:name entry)
-                   (:email entry)
-                   (readable-date (:published entry))
-                   (readable-date (:updated entry))
-                   (:link entry)
-                   (:title entry)
-                   (clean-html (:content entry)))}))
-
-(defn xml->hiccup
-  [xml]
-  (if-let [t (:tag xml)]
-    (let [elem [t]
-          elem (if-let [attrs (:attrs xml)]
-                 (conj elem attrs)
-                 elem)]
-      (into elem (map xml->hiccup (:content xml))))
-    xml))
-
-(def tag-str
-  {:h1 "# "
-   :h2 "## "
-   :h3 "### "
-   :h4 "#### "
-   :h5 "##### "
-   :h6 "###### "
-   :p ""
-   :div ""
-   :br "\n"
-   :img "IMAGE"
-   :ul ""
-   :li "\n - "})
-
-(defn xml->str
-  [xml]
-  (if-let [t (:tag xml)]
-    (let [elem-start (if (t tag-str) (t tag-str) "")]
-      (apply str (concat
-                  [elem-start]
-                  (mapv xml->str (:content xml)))))
-    xml))
-
-(defn html-str->markdown
-  "Parses and converts an html string to markdown."
-  [s]
-  (-> s
-      (xml/parse-str {:namespace-aware false})
-      xml->str))
-
-(defn entry->markdown
-  "Converts a parsed XML entry node into a markdown document."
-  [entry]
-  (let [entry (normalize-entry entry)]
-    {:id (:id entry)
-     :post (format "
-name: %s
-email: %s
-published: %s
-updated: %s
-link: [%s](%s)
-
-# %s
-
-%s"
-                   (:name entry)
-                   (:email entry)
-                   (readable-date (:published entry))
-                   (readable-date (:updated entry))
-                   (:link entry)
-                   (:link entry)
-                   (:title entry)
-                   (-> entry :content clean-html html-str->markdown))}))
+  (let [entry (normalize-entry entry)
+        info-span (fn [label s]
+                    [:span {:style {:display "block"
+                                    :margin-bottom "2px"}}
+                     [:strong label] s])]
+    (assoc entry :post
+           (str
+            "<!DOCTYPE html>\n"
+            (html
+             (list
+              [:head
+               [:meta {:charset "utf-8"}]
+               [:title (:title entry)]]
+              [:body
+               [:div {:class "post-info"}
+                (info-span "Author: " (:name entry))
+                (info-span "Email: " (:email entry))
+                (info-span "Published: " (:published entry))
+                (info-span "Updated: " (:updated entry))]
+               [:a {:href (:link entry)} [:h1 (:title entry)]]
+               (->> entry :content
+                    clean-html
+                    html-str->hiccup
+                    html)]))))))
 
 (def cli-options
   [["-h" "--help"]
@@ -235,7 +256,7 @@ link: [%s](%s)
 (defn save!
   [opts]
   (let [save-fn (get {"html" entry->html
-                      "md" entry->markdown} (:format opts))
+                      "edn" entry->hiccup} (:format opts))
         cur-str (slurp (:url opts))
         prev-fname (str (:dir opts) "/" "previous-feed.atom")
         prev-str (when (.exists (io/file prev-fname))
