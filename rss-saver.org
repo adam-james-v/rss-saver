@@ -249,15 +249,9 @@ As part of the design criteria, I want this to work without pulling any new libr
 
 (defmethod node->hiccup :div [node] (node->hiccup (:content node)))
 
-#_(defmethod node->hiccup :img
-  [{:keys [tag attrs]}]
-  [tag attrs])
-
 (defmethod node->hiccup :default
   [{:keys [tag attrs content]}]
   [tag attrs (node->hiccup content)])
-
-#_(defmethod node->hiccup :br [node] [:br])
 
 (defn html-str->hiccup
   "Parses and converts an html string to markdown."
@@ -266,15 +260,14 @@ As part of the design criteria, I want this to work without pulling any new libr
       (xml/parse-str {:namespace-aware false})
       node->hiccup))
 
-(defn entry->hiccup
+(defn entry->edn
   "Converts a parsed XML entry node into a Hiccup data structure."
   [entry]
   (let [entry (normalize-entry entry)]
     {:id (:id entry)
-     :post (->> entry :content
-                clean-html
-                html-str->hiccup
-                #_selective-flatten)}))
+     :post (assoc entry :post (->> entry :content
+                                   clean-html
+                                   html-str->hiccup))}))
 #+end_src
 
 ** basic-html
@@ -321,7 +314,7 @@ As part of the design criteria, I want this to work without pulling any new libr
    ["-u" "--url URL" "The URL of the RSS feed you want to save."]
    ["-d" "--dir DIR" "The directory where articles will be saved."
     :default "./posts"]
-   ["-f" "--format FORMAT" "The format of saved articles. Either 'html' or 'md' for markdown, defaulting to html if unspecified."
+   ["-f" "--format FORMAT" "The format of saved articles. Either 'html' or 'edn' for a Clojure Map with Hiccup style syntax. Defaults to html if unspecified."
     :default "html"]
    ["-c" "--clear" "Clear the cached copy of the previous feed."]])
 
@@ -333,7 +326,7 @@ As part of the design criteria, I want this to work without pulling any new libr
 (defn save!
   [opts]
   (let [save-fn (get {"html" entry->html
-                      "edn" entry->hiccup} (:format opts))
+                      "edn" entry->edn} (:format opts))
         cur-str (slurp (:url opts))
         prev-fname (str (:dir opts) "/" "previous-feed.atom")
         prev-str (when (.exists (io/file prev-fname))
