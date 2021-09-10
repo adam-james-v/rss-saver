@@ -1,3 +1,4 @@
+#!/usr/local/bin/bb
 (ns rss-saver.main
   (:require [clojure.string :as str]
             [clojure.data.xml :as xml]
@@ -5,7 +6,7 @@
             [clojure.zip :as zip]
             [clojure.java.shell :as sh :refer [sh]]
             [clojure.tools.cli :as cli]
-            [hiccup.core :refer [html]]))
+            [hiccup2.core :refer [html]]))
 
 ;; https://ravi.pckl.me/short/functional-xml-editing-using-zippers-in-clojure/
 (defn edit-nodes
@@ -130,26 +131,6 @@
   [node]
   (when-not (= (str/trim node) "") node))
 
-(defn inline-elem? [item] (when (#{:em :strong} (first item)) true))
-(defn inline? [item] (or (string? item) (inline-elem? item)))
-
-(defn group-inline
-  [list]
-  (let [groups (partition-by inline? list)
-        f (fn [list]
-            (let [f (fn [[a b c]]
-                      (cond
-                        (and (string? a)
-                             (inline-elem? b)
-                             (string? c))
-                        [:p a b c]
-                        
-                        :else
-                        a))]
-              (map f (partition-all 3 1 list))))]
-    (->> groups
-         (map f))))
-
 (defn de-dupe
   [list]
   (->> list
@@ -182,12 +163,29 @@
   [{:keys [tag attrs content]}]
   [tag attrs (node->hiccup content)])
 
+(defn inline-elem? [item] (when (#{:em :strong :a} (first item)) true))
+(defn inline? [item] (or (string? item) (inline-elem? item)))
+
+(defn group-inline
+  [list]
+  (let [groups (partition-by inline? list)
+        f (fn [l]
+            (if (not= (first (first l)) :br)
+              (into [:p] l)
+              l))]
+    (->> groups
+         (map f)
+         selective-flatten
+         (remove #(= :br (first %))))))
+
 (defn html-str->hiccup
   "Parses and converts an html string to markdown."
   [s]
   (-> s
       (xml/parse-str {:namespace-aware false})
-      node->hiccup))
+      node->hiccup
+      group-inline
+      de-dupe))
 
 (defn entry->edn
   "Converts a parsed XML entry node into a Hiccup data structure."
@@ -213,33 +211,35 @@
                                     :margin-bottom "2px"}}
                      [:strong label] s])]
     (assoc entry :post
-           (str
+           (->
+            (str
             "<!DOCTYPE html>\n"
             (html
-             (list
-              [:head
-               [:meta {:charset "utf-8"}]
-               [:title (:title entry)]]
-              [:body
-               [:div {:class "post-info"}
-                (info-span "Author: " (:name entry))
-                (info-span "Email: " (:email entry))
-                (info-span "Published: " (:published entry))
-                (info-span "Updated: " (:updated entry))]
-               [:a {:href (:link entry)} [:h1 (:title entry)]]
-               (->> entry :content
-                    clean-html
-                    html-str->hiccup
-                    html)]))))))
+             {:mode :html}
+             [:head
+              [:meta {:charset "utf-8"}]
+              [:title (:title entry)]]
+             [:body
+              [:div {:class "post-info"}
+               (info-span "Author: " (:name entry))
+               (info-span "Email: " (:email entry))
+               (info-span "Published: " (:published entry))
+               (info-span "Updated: " (:updated entry))]
+              [:a {:href (:link entry)} [:h1 (:title entry)]]
+              (->> entry :content
+                   clean-html
+                   html-str->hiccup)]))
+           (str/replace #"</br>" "")))))
 
 (def cli-options
   [["-h" "--help"]
    ["-u" "--url URL" "The URL of the RSS feed you want to save."]
    ["-d" "--dir DIR" "The directory where articles will be saved."
     :default "./posts"]
-   ["-f" "--format FORMAT" "The format of saved articles. Either 'html' or 'edn' for a Clojure Map with Hiccup style syntax. Defaults to html if unspecified."
-    :default "html"]
-   ["-c" "--clear" "Clear the cached copy of the previous feed."]])
+   ["-f" "--format FORMAT" "The format of saved articles. Either 'html' or 'edn' for a Clojure Map with the post saved as Hiccup style syntax. Defaults to edn if unspecified."
+    :default "edn"]
+   ["-c" "--clear" "Clear the cached copy of the previous feed."]
+   ["-s" "--silent" "Silence the script's output."]])
 
 (defn clear!
   [opts]
@@ -259,7 +259,9 @@
         entries (remove (into #{} prev) cur)]
     (if (> (count entries) 0)
       (do
-        (println (str "Handling " (count entries) " entries."))
+        (when-not (:silent opts)
+          (println "Handling" (count entries) "entries as" (str (:format opts) ".")))
+        
         (sh "mkdir" "-p" (:dir opts))
         (doseq [{:keys [id post]} (mapv save-fn entries)]
           (let [fname (str
@@ -268,7 +270,9 @@
                        (:format opts))]
             (spit fname post)))
         (spit prev-fname cur-str))
-      (println "No changes found in feed."))))
+
+      (when-not (:silent opts)
+        (println "No changes found in feed.")))))
 
 (defn -main
   [& args]
@@ -276,10 +280,15 @@
         opts (:options parsed)]
     (cond
       (:help opts)
-      (println (str "Usage:" "\n" (:summary parsed)))
+      (println "Usage:\n" (:summary parsed))
 
       (nil? (:url opts))
-      (println "Please specify feed URL.")
+      (when-not (:silent opts)
+        (println "Please specify feed URL."))
+
+      (not (#{"html" "edn"} (:format opts)))
+      (when-not (:silent opts)
+        (println "Invalid format:" (:format opts)))
 
       :else
       (do
