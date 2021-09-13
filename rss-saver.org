@@ -1,8 +1,25 @@
 * rss-saver
-A script that saves my blog posts from [[https://world.hey.com/adam.james/]]
+A simple Clojure (Babashka) script to save world@hey.com blog posts locally.
+
+I use hey.com's blog feature to write blog posts to help me clarify and improve my own thinking about life, design, and programming. It's a cool feature of a nice email service, but I worry that I may not be able to retrieve my posts in the event of service shutdown, or if I move on to another email provider in the future.
+
+This script is meant to be run automatically every night (or so) via a crontab entry. It downloads the feed.atom xml file from the provided URL, checks for any changes from the previous download, and saves new entries.
 
 ** readme
 #+begin_src markdown :tangle ./readme.md
+```
+ ______________
+|[]            |
+|  __________  |
+|  |  RSS-  |  |
+|  | saver  |  |
+|  |________|  |
+|   ________   |
+|   [ [ ]  ]   |
+\___[_[_]__]___|
+
+```
+
 # RSS-saver
 A simple Clojure (Babashka) script to save world@hey.com blog posts locally.
 
@@ -10,8 +27,26 @@ I use hey.com's blog feature to write blog posts to help me clarify and improve 
 
 This script is meant to be run automatically every night (or so) via a crontab entry. It downloads the feed.atom xml file from the provided URL, checks for any changes from the previous download, and saves new entries.
 
+You can read the [design doc](./rss-saver.org#design) for a complete understanding of this project.
+
+## Installation
+If you already have the latest Babashka, all you have to do is grab the script from this repo:
+
+```sh
+git clone https://github.com/adam-james-v/rss-saver.git
+cd rss-saver
+```
+
+And install the script `rss-saver.clj` wherever you like to run scripts from.
+
+```sh
+cp rss-saver.clj /path/to/your/scripts/dir
+```
+
 ## Usage
-To run this script once, you must supply the feed url with `-u` or `--url`. The provided URL must point to the rss feed XML file directly. For example, my URL is [](https://world.hey.com/adam.james/feed.atom).
+To run this script once, you must supply the feed url with `-u` or `--url`. The provided URL must point to the rss feed XML file directly. For example, my URL is [https://world.hey.com/adam.james/feed.atom](https://world.hey.com/adam.james/feed.atom).
+
+,**NOTE:** Your URL *must* point to the feed.xml file for this script to work.
 
 ```sh
 bb rss-saver.clj -u YOUR_URL
@@ -22,14 +57,22 @@ The above command will download the XML file, parse and save to .edn files each 
 ```sh
 Usage:
  -h, --help
- -u, --url URL                The URL of the RSS feed you want to save.
- -d, --dir DIR        ./posts The directory where articles will be saved.
- -f, --format FORMAT  edn     The format of saved articles. Either 'html' or
-                              'edn' for a Clojure Map with the post saved as
-                              Hiccup style syntax. Defaults to edn if unspecified.
- -c, --clear                  Clear the cached copy of the previous feed.
- -s, --silent                 Silence the script's output.
+ -u, --url URL                 The URL of the RSS feed you want to save.
+ -d, --dir DIR        ./posts  The directory where articles will be saved.
+ -f, --format FORMAT  edn      The format of saved articles. Either 'html' or
+                               'edn' for a Clojure Map with the post saved as
+                               Hiccup style syntax. Defaults to edn if unspecified.
+ -c, --clear                   Clear the cached copy of the previous feed.
+ -s, --silent                  Silence the script's output.
 ```
+
+I use this script with an automation using crontab on macOS. My crontab entry:
+
+```sh
+0 12 * * * /usr/local/bin/bb /Users/adam/scripts/rss-saver.clj -u https://world.hey.com/adam.james/feed.atom
+```
+
+Which runs the script once at noon every day. It's default save directory is ./posts, so my articles are saved in `/Users/adam/scripts/rss-saver/posts`, but you can set the path to wherever you want using the `-d` or `--dir` options. I recommend using an absolute path to avoid confusion.
 
 ## Requirements
 RSS-Saver requires [Babashka](https://github.com/babashka/babashka). While writing this script, I was using *version 0.6.0*. The script uses the following libraries, which are bundled with the latest Babashka:
@@ -45,32 +88,74 @@ RSS-Saver requires [Babashka](https://github.com/babashka/babashka). While writi
 If you want to run things automatically, you need some mechanism to automate running scripts. I am using crontab.
 
 ## Status
-The script is complete and working as intended. A few minor things remain to tweak:
-
- - add some docstrings to the more complicated functions
- - add a few tests for node transforms.
+The script is complete and working as intended. Bugs will be fixed if I encounter them or if someone posts an issue. This is intended to be a *very* simple script with a small and specific scope, so new features won't be implemented. This project is *done* (Yay!).
 
 #+end_src
 
-* What is RSS?
-I've never properly learned what RSS actually is. Here's my RSS link that I'll be using:
+* Design
+The problem that RSS-saver solves is one of backing up and keeping open access to my blog posts on [[https://world.hey.com/adam.james]]; a useful blog service offered to paying Hey email users. I enjoy this service and intend to keep using it for some time, but there's always the potential that the service changes or disappears, or I change my mind about using it. In such a case, I want to be certain that my blog posts are still available to me in some useful form.
+
+So, this project has the following requirements:
+
+ - automatically download the RSS feed XML
+ - parse the feed into individual entries
+ - cache the feed to avoid constantly re-parsing downloaded posts
+ - save entries in an open format
+ - runnable as a Babashka script with no external deps
+ - work with world@hey.com feed URLs
+
+And will *not*:
+
+ - guarantee correct parsing of feeds from other services
+ - render the posts into anything other than a basic .html page or .edn file.
+ - handle automation internally
+ - detect changes to the feed; only pull/compare every time the script runs
+
+This project is considered complete when the above requirements are met with clearly working functionality. That is, the invokation of the script, with the proper URL parameter, must successfully download, parse, and save the blog entries to my save directory.
+ 
+** Meta-Problem
+I have a problem of not always finishing my work. As a self-taught dev, I often worry that I'm missing big important skills in software development, and one thing I know for sure is that an inability to /finish/ projects is a problem. This project is the first of a series of small yet concrete projects that can be /well-designed/, /well-scoped/, and clearly considered *finished* once the design goal has been met.
+
+In short, this project aims to solve my meta-problem of having a weak ability to design and complete software projects. This design doc is a specific effort on my part to be clear up-front about the project's goals and intent.
+
+** RSS
+Here's my RSS link that I'll be using:
 
 [[https://world.hey.com/adam.james/feed.atom]]
 
 I assume that the atom file at that address is automatically updated any time a post is created, and I assume it's just XML with all of the blog's content.
 
-What I think RSS does:
+What I'm pretty sure RSS does:
 
 Every time the site updates, the feed.atom file is re-generated with the newest content appended. Then, the RSS reader is a separate app that polls feed.atom URLs, downloads them, and parses/displays the contents according to the app's design.
 
-* Design
-This is a simple script that only saves my world.hey.com blog posts to text files. Run the script once, it will grab feed.atom from the URL, parse it, and save each post and its content as plaintext.
+Using these assumptions, I am making a very simple tool that just pulls the entire feed XML every time, compares it to a cached file, and parses new entries into some structure which can be saved.
 
-To expand that minimal scope, I want:
+** Downloading the Feed XML
+To download the feed, I will simply use ~(slurp url)~.
 
-- basic diffing approach which saves the previous feed.atom file so that when the script runs, it can compare the newest feed from the previous, and only saves new articles.
-- some articles have images, I would like to be able to download those images and save them inside a folder generated per post.
-- I want to emit the posts in either markdown OR org files, not sure yet.
+** Parsing
+To parse the feed, I am using ~clojure.data.xml~ and some zipper manipulation functions. The feed is parsed into an XML tree. At this point, I can grab a list of nodes that match the /entry/ tag. It is this list of entries over which I map various functions to clean up and ultimately save the entries as files (.html or .edn) in the posts directory.
+
+My format of choice is a .edn file which is just the Clojure map for each entry saved to a file. The map contains the following keys: ~(:email :content :updated :name :title :link :id :post :published)~. Most keys are self-explanatory, but I want to note the ~:post~ and ~:content~ keys, which are a bit ambiguous.
+
+The ~:content~ key is the /unmodified/ XML tree node that comes from the initial parse of the feed. This is left so that any future scripts or rendering functions still have access to the entirety of the unchanged data.
+
+The ~:post~ key contains the /parsed and modified/ *Hiccup* data structure, which follows some specific logic for formatting and improving the html's structure. For example, instead of plain strings and <br> tags, <p> tags are used. This data manipulation is suited to *my* purposes, and leaves a nice, clean, hiccup structure for future rendering scripts. It is exactly this ~:post~ value that gets rendered when exporting the basic .html page. If other users wish to handle the posts differently, they can use the ~:content~ key as previously mentioned.
+
+** Caching
+To cache, I save the downloaded feed.xml into the posts directory. Then, whenever the script is run, I slurp both the current feed from the URL and the previous feed from the local file. With each in memory, I parse them into XML trees and get the entry nodes into a set. Removing from the /current/ set all entries from the /previous/ set, I am left with only new posts. If the set is empty, no further action is taken and the script terminates with a message.
+
+** Saving
+All saving (of the cache and posts) is handled with ~(spit (str dir file))~. Formats are limited to .html and .edn, and the main reason .html is provided is because I get it 'for free' because I want to have my posts saved in .edn files with a clean Hiccup style structure.
+
+** Using Babashka
+I want to use Babashka because I really love Clojure but want a tool that is mentally 'lightweight' and very quick and easy. Babashka /v0.6.0/ has a bunch of built in libraries already and works quickly and reliably. I won't need any dependencies to be downloaded for this script, which keeps its portability high, and makes it straight forward for other people to fork and modify the script for their own purposes, if they desire.
+
+** World@Hey.com Only
+I am only guaranteeing that the parsing strategy in this script will work for hey.com feeds, as I really don't want to cover other scenarios. I can't predict what other people might want from other feeds. The strategy in this script is quite simple, so anyone could modify things to fit the feeds they care about anyway. As well, I do also save the un-modified content node, which can be used to construct whatever render someone could want.
+
+Other feeds may actually work fine, but I'm not guaranteeing it. Nor am I going to modify my script to handle them.
 
 * main
 ** ns
@@ -408,7 +493,7 @@ As part of the design criteria, I want this to work without pulling any new libr
 (shutdown-agents)
 #+end_src
 
-* testing-defs
+* tests
 #+begin_src clojure
 (def opts {:url "https://world.hey.com/adam.james/feed.atom"
            :dir "posts"
