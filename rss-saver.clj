@@ -10,6 +10,10 @@
 
 ;; https://ravi.pckl.me/short/functional-xml-editing-using-zippers-in-clojure/
 (defn edit-nodes
+  "Edit nodes from `zipper` that return `true` from the `matcher` predicate fn with the `editor` fn.
+  Returns the root of the provided zipper, *not* a zipper.
+  The `matcher` fn expects a zipper location, `loc`, and returns `true` (or some value) or `false` (or nil).
+  The `editor` fn expects a `node` and returns a potentially modified `node`."
   [zipper matcher editor]
   (loop [loc zipper]
     (if (zip/end? loc)
@@ -22,6 +26,9 @@
         (recur (zip/next loc))))))
 
 (defn remove-nodes
+  "Remove nodes from `zipper` that return `true` from the `matcher` predicate fn.
+  Returns the root of the provided zipper, *not* a zipper.
+  The `matcher` fn expects a zipper location, `loc`, and returns `true` (or some value) or `false` (or nil)."
   [zipper matcher]
   (loop [loc zipper]
     (if (zip/end? loc)
@@ -32,6 +39,8 @@
         (recur (zip/next loc))))))
 
 (defn get-nodes
+  "Returns a list of nodes from `zipper` that return `true` from the `matcher` predicate fn.
+  The `matcher` fn expects a zipper location, `loc`, and returns `true` (or some value) or `false` (or nil)."
   [zipper matcher]
   (loop [loc zipper
          acc []]
@@ -41,11 +50,13 @@
         (recur (zip/next loc) (conj acc (zip/node loc)))
         (recur (zip/next loc) acc)))))
 
-(defn match-entry?
-  [loc]
-  (let [node (zip/node loc)
-        {:keys [tag]} node]
-    (= tag :entry)))
+(defn match-tag
+  "Returns a `matcher` fn that matches any node containing the specified `key` as its `:tag` value."
+  [key]
+  (fn [loc]
+    (let [node (zip/node loc)
+          {:keys [tag]} node]
+      (= tag key))))
 
 (defn feed-str->entries
   "Returns a sequence of parsed article entry nodes from an XML feed string."
@@ -53,7 +64,7 @@
   (-> s
       (xml/parse-str {:namespace-aware false})
       zip/xml-zip
-      (get-nodes match-entry?)))
+      (get-nodes (match-tag :entry))))
 
 (defn normalize-entry
   "Normalizes the entry node by flattening content into a map."
@@ -73,42 +84,22 @@
                  (map f (remove #(= (:tag %) :author) content))
                  author-map))))
 
-(defn match-tag
-  [k]
-  (fn
-    [loc]
-    (let [node (zip/node loc)
-          {:keys [tag]} node]
-      (= tag k))))
-
-(defn wrap-strs-in-p-tags
-  [node]
-  (let [f (fn [item]
-            (if (string? item)
-              {:tag :p :attrs {} :content [item]}
-              item))
-        new-content (->> node
-                         :content
-                         (map f))]
-    (assoc node :content new-content)))
-
-(defn convert-to-p-tag
-  [node]
-  (assoc node :tag :p))
-
 (defn unwrap-img-from-figure
+  "Returns the simplified `:img` node from its parent node."
   [node]
   (let [img-node (-> node
                  zip/xml-zip
                  (get-nodes (match-tag :img))
                  first)
-        new-attrs (-> img-node
-                      :attrs
+        new-attrs (-> img-node :attrs
                       (dissoc :srcset :decoding :loading))]
     (assoc img-node :attrs new-attrs)))
 
 (defn clean-html
-  "Clean up the html string from the feed."
+  "Cleans up the html string `s`.
+  The string is well-formed html, but is coerced into XML conforming form by closing <br> and <img> tags.
+  The emitted XML string has the <\\?xml...> tag stripped.
+  This cleaning is done so that clojure.data.xml can continue to be used for parsing in later stages."
   [s]
   (let [s (-> s
               (str/replace "<br>" "<br></br>")
@@ -131,7 +122,13 @@
   [node]
   (when-not (= (str/trim node) "") node))
 
+(defmethod node->hiccup :div [node] (node->hiccup (:content node)))
+(defmethod node->hiccup :default
+  [{:keys [tag attrs content]}]
+  [tag attrs (node->hiccup content)])
+
 (defn de-dupe
+  "Remove only consecutive duplicate entries from the `list`."
   [list]
   (->> list
        (partition-by identity)
@@ -157,16 +154,12 @@
        de-dupe
        selective-flatten))
 
-(defmethod node->hiccup :div [node] (node->hiccup (:content node)))
-
-(defmethod node->hiccup :default
-  [{:keys [tag attrs content]}]
-  [tag attrs (node->hiccup content)])
-
 (defn inline-elem? [item] (when (#{:em :strong :a} (first item)) true))
 (defn inline? [item] (or (string? item) (inline-elem? item)))
 
 (defn group-inline
+  "Groups the `list` of strings and Hiccup elements using the `inline?` predicate and wraps them in <p> tags.
+  Once all groups are wrapped, the list is flattened again and any remaining <br> tags are removed."
   [list]
   (let [groups (partition-by inline? list)
         f (fn [l]
@@ -179,7 +172,7 @@
          (remove #(= :br (first %))))))
 
 (defn html-str->hiccup
-  "Parses and converts an html string to markdown."
+  "Parses and converts an html string `s` into a Hiccup data structure."
   [s]
   (-> s
       (xml/parse-str {:namespace-aware false})
@@ -192,11 +185,12 @@
   [entry]
   (let [entry (normalize-entry entry)]
     {:id (:id entry)
-     :post (assoc entry :post (->> entry :content
-                                   clean-html
-                                   html-str->hiccup))}))
+     :file-contents (assoc entry :post (->> entry :content
+                                            clean-html
+                                            html-str->hiccup))}))
 
 (defn readable-date
+  "Format the date string `s` into a nicer form for display."
   [s]
   (as-> s s
     (str/split s #"[a-zA-Z]")
@@ -209,8 +203,11 @@
         info-span (fn [label s]
                     [:span {:style {:display "block"
                                     :margin-bottom "2px"}}
-                     [:strong label] s])]
-    (assoc entry :post
+                     [:strong label] s])
+        post (->> entry :content
+                   clean-html
+                   html-str->hiccup)]
+    (assoc entry :file-contents
            (->
             (str
             "<!DOCTYPE html>\n"
@@ -223,12 +220,10 @@
               [:div {:class "post-info"}
                (info-span "Author: " (:name entry))
                (info-span "Email: " (:email entry))
-               (info-span "Published: " (:published entry))
-               (info-span "Updated: " (:updated entry))]
+               (info-span "Published: " (readable-date (:published entry)))
+               (info-span "Updated: " (readable-date (:updated entry)))]
               [:a {:href (:link entry)} [:h1 (:title entry)]]
-              (->> entry :content
-                   clean-html
-                   html-str->hiccup)]))
+              post]))
            (str/replace #"</br>" "")))))
 
 (def cli-options
@@ -261,16 +256,20 @@
       (do
         (when-not (:silent opts)
           (println "Handling" (count entries) "entries as" (str (:format opts) ".")))
-        
+
+        ;; always create the posts directory
         (sh "mkdir" "-p" (:dir opts))
-        (doseq [{:keys [id post]} (mapv save-fn entries)]
+
+        ;; for each entry, transformed with the appropriate fn, save the file with id.ext
+        (doseq [{:keys [id file-contents]} (mapv save-fn entries)]
           (let [fname (str
                        (:dir opts) "/"
                        (second (str/split id #"/")) "."
                        (:format opts))]
-            (spit fname post)))
+            (spit fname file-contents)))
         (spit prev-fname cur-str))
 
+      ;; when there are no new entries, simply tell the user and then do nothing.
       (when-not (:silent opts)
         (println "No changes found in feed.")))))
 
@@ -295,5 +294,7 @@
         (when (:clear opts) (clear! opts))
         (save! opts)))))
 
+;; apply -main to the args because I call this script with bb rss-saver.clj -u URL
+;; if you run this script with clj -m, these two s-exprs should be commented out.
 (apply -main *command-line-args*)
 (shutdown-agents)

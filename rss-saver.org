@@ -1,4 +1,4 @@
-* rss-saver
+* RSS-saver
 A simple Clojure (Babashka) script to save world@hey.com blog posts locally.
 
 I use hey.com's blog feature to write blog posts to help me clarify and improve my own thinking about life, design, and programming. It's a cool feature of a nice email service, but I worry that I may not be able to retrieve my posts in the event of service shutdown, or if I move on to another email provider in the future.
@@ -159,11 +159,11 @@ Other feeds may actually work fine, but I'm not guaranteeing it. Nor am I going 
 
 * main
 ** ns
-Need xml parsing. Might need to build a zipper to edit nodes.
-
-I'll want to run it as a CLI, and probably want to turn the project into another GRAALVM native image example, so I'll need tools.cli as well.
-
 As part of the design criteria, I want this to work without pulling any new libraries from outside of the babashka tool. This means sticking with clojure.data.xml even though other libraries might be a little more straight forward. I can build a zipper editor easily enough so it's not a problem.
+
+I'll want to run it as a CLI, so I'll need tools.cli as well.
+
+
 
 #+begin_src clojure :tangle ./rss-saver.clj
 #!/usr/local/bin/bb
@@ -179,9 +179,16 @@ As part of the design criteria, I want this to work without pulling any new libr
 #+end_src
 
 ** zipper tools
+I want to get better with zippers, but for now, I can use the examples provided by [[https://ravi.pckl.me/short/functional-xml-editing-using-zippers-in-clojure/]].
+I should probably make a post/video about zippers to improve my own understanding of them, and re-implement my own editor functions in that process.
+
 #+begin_src clojure :tangle ./rss-saver.clj
 ;; https://ravi.pckl.me/short/functional-xml-editing-using-zippers-in-clojure/
 (defn edit-nodes
+  "Edit nodes from `zipper` that return `true` from the `matcher` predicate fn with the `editor` fn.
+  Returns the root of the provided zipper, *not* a zipper.
+  The `matcher` fn expects a zipper location, `loc`, and returns `true` (or some value) or `false` (or nil).
+  The `editor` fn expects a `node` and returns a potentially modified `node`."
   [zipper matcher editor]
   (loop [loc zipper]
     (if (zip/end? loc)
@@ -194,6 +201,9 @@ As part of the design criteria, I want this to work without pulling any new libr
         (recur (zip/next loc))))))
 
 (defn remove-nodes
+  "Remove nodes from `zipper` that return `true` from the `matcher` predicate fn.
+  Returns the root of the provided zipper, *not* a zipper.
+  The `matcher` fn expects a zipper location, `loc`, and returns `true` (or some value) or `false` (or nil)."
   [zipper matcher]
   (loop [loc zipper]
     (if (zip/end? loc)
@@ -204,6 +214,8 @@ As part of the design criteria, I want this to work without pulling any new libr
         (recur (zip/next loc))))))
 
 (defn get-nodes
+  "Returns a list of nodes from `zipper` that return `true` from the `matcher` predicate fn.
+  The `matcher` fn expects a zipper location, `loc`, and returns `true` (or some value) or `false` (or nil)."
   [zipper matcher]
   (loop [loc zipper
          acc []]
@@ -213,15 +225,18 @@ As part of the design criteria, I want this to work without pulling any new libr
         (recur (zip/next loc) (conj acc (zip/node loc)))
         (recur (zip/next loc) acc)))))
 
-(defn match-entry?
-  [loc]
-  (let [node (zip/node loc)
-        {:keys [tag]} node]
-    (= tag :entry)))
-  
+(defn match-tag
+  "Returns a `matcher` fn that matches any node containing the specified `key` as its `:tag` value."
+  [key]
+  (fn [loc]
+    (let [node (zip/node loc)
+          {:keys [tag]} node]
+      (= tag key))))
 #+end_src
 
 ** entry nodes
+Slurp the XML from the given URL. This returns a string which can be parsed with xml/parse-str. The feed itself has some extra data we don't need, so I want to turn it into a zipper and get a list of just the entry nodes, which are the posts in the blog.
+
 #+begin_src clojure :tangle ./rss-saver.clj
 (defn feed-str->entries
   "Returns a sequence of parsed article entry nodes from an XML feed string."
@@ -229,12 +244,17 @@ As part of the design criteria, I want this to work without pulling any new libr
   (-> s
       (xml/parse-str {:namespace-aware false})
       zip/xml-zip
-      (get-nodes match-entry?)))
-
+      (get-nodes (match-tag :entry))))
 #+end_src
 
 ** node-transforms
+The entire feed has been parsed down to a sequence of entries, each of which can be considered its own tree of nodes. Node transforms can now be built to work with each entry individually.
+
 *** normalize
+Each entry can be 'flattened' down a bit, so I have a normalize function to help with that. Content within any node is a sequence of strings or other nodes. At this stage, all strings within the entry's content are empty or newline characters and so can be filtered out.
+
+There are two special elements: links and the author content. Links have empty ~:content~ tags but need the ~:href~ from the attributes instead, so a cond is built to handle this. The author map is built separately, using the same map function as with the rest of the content. Then, the content and author maps are merged to form the flat, normalized map, which can be processed further.
+
 #+begin_src clojure :tangle ./rss-saver.clj
 (defn normalize-entry
   "Normalizes the entry node by flattening content into a map."
@@ -256,43 +276,29 @@ As part of the design criteria, I want this to work without pulling any new libr
 #+end_src
 
 *** clean-html
+Since no external libraries are used, I am manipulating XML strings slightly to keep the XML parser from complaining about html tags that don't have terminating tags, like <br> and <img>. At the same time, I unwrap image tags from figures, which is how Hey.com wraps images in entries.
+
+This string cleaning method is as bit of a hack, but works fine and is meant to allow ~clojure.data.xml~ to continue being used for further parsing/transforming steps later on in the script.
+
+The clean-html function is run on every entry's content string after normalization.
+
 #+begin_src clojure :tangle ./rss-saver.clj
-(defn match-tag
-  [k]
-  (fn
-    [loc]
-    (let [node (zip/node loc)
-          {:keys [tag]} node]
-      (= tag k))))
-
-(defn wrap-strs-in-p-tags
-  [node]
-  (let [f (fn [item]
-            (if (string? item)
-              {:tag :p :attrs {} :content [item]}
-              item))
-        new-content (->> node
-                         :content
-                         (map f))]
-    (assoc node :content new-content)))
-
-(defn convert-to-p-tag
-  [node]
-  (assoc node :tag :p))
-
 (defn unwrap-img-from-figure
+  "Returns the simplified `:img` node from its parent node."
   [node]
   (let [img-node (-> node
                  zip/xml-zip
                  (get-nodes (match-tag :img))
                  first)
-        new-attrs (-> img-node
-                      :attrs
+        new-attrs (-> img-node :attrs
                       (dissoc :srcset :decoding :loading))]
     (assoc img-node :attrs new-attrs)))
 
 (defn clean-html
-  "Clean up the html string from the feed."
+  "Cleans up the html string `s`.
+  The string is well-formed html, but is coerced into XML conforming form by closing <br> and <img> tags.
+  The emitted XML string has the <\\?xml...> tag stripped.
+  This cleaning is done so that clojure.data.xml can continue to be used for parsing in later stages."
   [s]
   (let [s (-> s
               (str/replace "<br>" "<br></br>")
@@ -303,10 +309,14 @@ As part of the design criteria, I want this to work without pulling any new libr
         (edit-nodes (match-tag :figure) unwrap-img-from-figure)
         xml/emit-str
         (str/replace #"<\?xml[\w\W]+?>" ""))))
-
 #+end_src
 
 ** hiccup
+The .edn file output will have a Hiccup data structure as its ~:post~ value. So, I need to build a set of functions that transform XML nodes (defrecords, which can be treated just as Clojure maps) into Hiccup-style vectors (eg. ~[:p {:display "inline-block"} "This is the content of a <p> tag.]~).
+
+*** Multi-method Dispatch
+I want to dispatch slightly different behaviour based on the element tag, so will use a multimethod. I like to build in a simple check in the dispatch function for lists of nodes. This way, I can handle recursive use of ~node->hiccup~ by building the ~:list~ method appropriately.
+
 #+begin_src clojure :tangle ./rss-saver.clj
 (defmulti node->hiccup
   (fn [node]
@@ -314,12 +324,28 @@ As part of the design criteria, I want this to work without pulling any new libr
       (map? node) (:tag node)
       (and (seqable? node) (not (string? node))) :list
       :else :string)))
+#+end_src
 
+*** Simple Cases
+I don't need much special behaviour, so the default 'catch-all' method will do most of the work. A simple string case and div case are also given.
+
+#+begin_src clojure :tangle ./rss-saver.clj
 (defmethod node->hiccup :string
   [node]
   (when-not (= (str/trim node) "") node))
 
+(defmethod node->hiccup :div [node] (node->hiccup (:content node)))
+(defmethod node->hiccup :default
+  [{:keys [tag attrs content]}]
+  [tag attrs (node->hiccup content)])
+#+end_src
+
+*** List Case
+This case has a bit of machinery to it. Every time the list method is used, it means that a sequence of nodes have to be handled. To clean up the structure, I am building a flattening function that runs on each list. This flatten function will flatten everything down completely, except for hiccup vectors. I can't simply ~mapcat~ everything because it would destry the hiccup-style structure, as vectors can be flattened down to their elements. The result of selective-flatten is a flat list of strings and/or hiccup elements.
+
+#+begin_src clojure :tangle ./rss-saver.clj
 (defn de-dupe
+  "Remove only consecutive duplicate entries from the `list`."
   [list]
   (->> list
        (partition-by identity)
@@ -344,17 +370,20 @@ As part of the design criteria, I want this to work without pulling any new libr
        (remove nil?)
        de-dupe
        selective-flatten))
+#+end_src
 
-(defmethod node->hiccup :div [node] (node->hiccup (:content node)))
+*** Re-grouping
+The flattened list of hiccup elements can then be processed and re-grouped on the basis of inline elements and string-br pairs. The html from hey.com blog posts has a lot of <br> tags and plain strings. I think that comes from the fact that it's html formatted to be viewed by email readers. However, for re-hosting to my own site, I want to use proper html structure, and so I want to group plain strings and <br> tags into <p> tags. I also need to make sure <ul>, <ol>, <li>, <em>, and <strong> tags are handled appropriately, so I have some grouping to do.
 
-(defmethod node->hiccup :default
-  [{:keys [tag attrs content]}]
-  [tag attrs (node->hiccup content)])
+I also de-dupe the list which can be helpful in eliminating extra newlines. There is a slight risk of this eliminating a deliberately duplicated sentence, but I'll just accept that as a potential weakness to this solution. I don't think I'll use that writing style at all anyway.
 
+#+begin_src clojure :tangle ./rss-saver.clj
 (defn inline-elem? [item] (when (#{:em :strong :a} (first item)) true))
 (defn inline? [item] (or (string? item) (inline-elem? item)))
 
 (defn group-inline
+  "Groups the `list` of strings and Hiccup elements using the `inline?` predicate and wraps them in <p> tags.
+  Once all groups are wrapped, the list is flattened again and any remaining <br> tags are removed."
   [list]
   (let [groups (partition-by inline? list)
         f (fn [l]
@@ -367,7 +396,7 @@ As part of the design criteria, I want this to work without pulling any new libr
          (remove #(= :br (first %))))))
 
 (defn html-str->hiccup
-  "Parses and converts an html string to markdown."
+  "Parses and converts an html string `s` into a Hiccup data structure."
   [s]
   (-> s
       (xml/parse-str {:namespace-aware false})
@@ -380,14 +409,19 @@ As part of the design criteria, I want this to work without pulling any new libr
   [entry]
   (let [entry (normalize-entry entry)]
     {:id (:id entry)
-     :post (assoc entry :post (->> entry :content
-                                   clean-html
-                                   html-str->hiccup))}))
+     :file-contents (assoc entry :post (->> entry :content
+                                            clean-html
+                                            html-str->hiccup))}))
 #+end_src
 
-** basic-html
+** html
+Since I have the parsing machinery, it's trivial to build an html page export function now. I simply have to make a document structure with Hiccup and place the content from the entry inside.
+
+*NOTE:* I have a ~(str/replace #"</br>" "")~ hack in this fn because I cannot figure out why my Babashka script is emitting closing br tags. In the REPL it works fine... If I leave the closing tags there, my web browser interprets it as two <br> tags instead, making the page render incorrectly.
+
 #+begin_src clojure :tangle ./rss-saver.clj
 (defn readable-date
+  "Format the date string `s` into a nicer form for display."
   [s]
   (as-> s s
     (str/split s #"[a-zA-Z]")
@@ -400,8 +434,11 @@ As part of the design criteria, I want this to work without pulling any new libr
         info-span (fn [label s]
                     [:span {:style {:display "block"
                                     :margin-bottom "2px"}}
-                     [:strong label] s])]
-    (assoc entry :post
+                     [:strong label] s])
+        post (->> entry :content
+                   clean-html
+                   html-str->hiccup)]
+    (assoc entry :file-contents
            (->
             (str
             "<!DOCTYPE html>\n"
@@ -414,16 +451,25 @@ As part of the design criteria, I want this to work without pulling any new libr
               [:div {:class "post-info"}
                (info-span "Author: " (:name entry))
                (info-span "Email: " (:email entry))
-               (info-span "Published: " (:published entry))
-               (info-span "Updated: " (:updated entry))]
+               (info-span "Published: " (readable-date (:published entry)))
+               (info-span "Updated: " (readable-date (:updated entry)))]
               [:a {:href (:link entry)} [:h1 (:title entry)]]
-              (->> entry :content
-                   clean-html
-                   html-str->hiccup)]))
+              post]))
            (str/replace #"</br>" "")))))
 #+end_src
 
 ** CLI
+The CLI handles the actual running of the program. I have a save! function that does the work, and -main is what is invoked when running the program via ~bb rss-saver.clj -u URL~ in your terminal or via a crontab entry.
+
+The ~save!~ function can appear a bit confusing at first. It's just doing the following things:
+
+ 1. detecting to save as edn or html from the options map.
+ 2. Downloading the current feed XML as a string and saving in memory.
+ 3. Loading the previous XML feed (if one exists) from the post directory and saving in memory.
+ 4. Parsing both feed strings into two lists of entry nodes.
+ 5. Creating the list of new entries by filtering the current nodes against previous nodes
+ 6. For every new entry, save with the appropriate transform function, as determined by the opts map.
+
 #+begin_src clojure :tangle ./rss-saver.clj
 (def cli-options
   [["-h" "--help"]
@@ -455,16 +501,20 @@ As part of the design criteria, I want this to work without pulling any new libr
       (do
         (when-not (:silent opts)
           (println "Handling" (count entries) "entries as" (str (:format opts) ".")))
-        
+
+        ;; always create the posts directory
         (sh "mkdir" "-p" (:dir opts))
-        (doseq [{:keys [id post]} (mapv save-fn entries)]
+
+        ;; for each entry, transformed with the appropriate fn, save the file with id.ext
+        (doseq [{:keys [id file-contents]} (mapv save-fn entries)]
           (let [fname (str
                        (:dir opts) "/"
                        (second (str/split id #"/")) "."
                        (:format opts))]
-            (spit fname post)))
+            (spit fname file-contents)))
         (spit prev-fname cur-str))
 
+      ;; when there are no new entries, simply tell the user and then do nothing.
       (when-not (:silent opts)
         (println "No changes found in feed.")))))
 
@@ -489,6 +539,8 @@ As part of the design criteria, I want this to work without pulling any new libr
         (when (:clear opts) (clear! opts))
         (save! opts)))))
 
+;; apply -main to the args because I call this script with bb rss-saver.clj -u URL
+;; if you run this script with clj -m, these two s-exprs should be commented out.
 (apply -main *command-line-args*)
 (shutdown-agents)
 #+end_src
