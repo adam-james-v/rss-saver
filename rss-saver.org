@@ -1,4 +1,12 @@
 * RSS-saver
+#+Title: RSS-saver
+#+AUTHOR: adam-james
+#+STARTUP: overview
+#+EXCLUDE_TAGS: excl
+#+PROPERTY: header-args :cache yes :noweb yes :results value :mkdirp yes :padline yes :async
+#+HTML_DOCTYPE: html5
+#+OPTIONS: toc:2 num:nil html-style:nil html-postamble:nil html-preamble:nil html5-fancy:t
+
 A simple Clojure (Babashka) script to save world@hey.com blog posts locally.
 
 I use hey.com's blog feature to write blog posts to help me clarify and improve my own thinking about life, design, and programming. It's a cool feature of a nice email service, but I worry that I may not be able to retrieve my posts in the event of service shutdown, or if I move on to another email provider in the future.
@@ -69,10 +77,10 @@ Usage:
 I use this script with an automation using crontab on macOS. My crontab entry:
 
 ```sh
-0 12 * * * /usr/local/bin/bb /Users/adam/scripts/rss-saver.clj -u https://world.hey.com/adam.james/feed.atom
+0 12 * * * /usr/local/bin/bb /Users/adam/scripts/rss-saver/rss-saver.clj -u https://world.hey.com/adam.james/feed.atom -d /Users/adam/scripts/rss-saver/posts
 ```
 
-Which runs the script once at noon every day. It's default save directory is ./posts, so my articles are saved in `/Users/adam/scripts/rss-saver/posts`, but you can set the path to wherever you want using the `-d` or `--dir` options. I recommend using an absolute path to avoid confusion.
+Which runs the script once at noon every day. It's default save directory is ./posts, and cron runs the script from your home folder, so my articles are saved in `/Users/adam/scripts/rss-saver/posts`, but you can set the path to wherever you want using the `-d` or `--dir` options. I recommend using an absolute path to avoid confusion.
 
 ## Requirements
 RSS-Saver requires [Babashka](https://github.com/babashka/babashka). While writing this script, I was using *version 0.6.0*. The script uses the following libraries, which are bundled with the latest Babashka:
@@ -89,6 +97,15 @@ If you want to run things automatically, you need some mechanism to automate run
 
 ## Status
 The script is complete and working as intended. Bugs will be fixed if I encounter them or if someone posts an issue. This is intended to be a *very* simple script with a small and specific scope, so new features won't be implemented. This project is *done* (Yay!).
+
+#+end_src
+
+* deps
+#+begin_src clojure
+{:deps
+  {org.clojure/data.xml {:mvn/version "0.0.8"}
+   org.clojure/zip      {:mvn/version "1.10.2"}
+   hiccup/hiccup        {:mvn/version "2.0.0-alpha2"}}}
 
 #+end_src
 
@@ -163,10 +180,13 @@ As part of the design criteria, I want this to work without pulling any new libr
 
 I'll want to run it as a CLI, so I'll need tools.cli as well.
 
-
-
-#+begin_src clojure :tangle ./rss-saver.clj
+#+NAME: shebang
+#+begin_src clojure :noexport:
 #!/usr/local/bin/bb
+#+end_src
+
+#+NAME: ns
+#+begin_src clojure
 (ns rss-saver.main
   (:require [clojure.string :as str]
             [clojure.data.xml :as xml]
@@ -174,15 +194,16 @@ I'll want to run it as a CLI, so I'll need tools.cli as well.
             [clojure.zip :as zip]
             [clojure.java.shell :as sh :refer [sh]]
             [clojure.tools.cli :as cli]
-            [hiccup2.core :refer [html]]))
+            [hiccup.core :refer [html]]))
 
 #+end_src
 
-** zipper tools
+** zipper-tools
 I want to get better with zippers, but for now, I can use the examples provided by [[https://ravi.pckl.me/short/functional-xml-editing-using-zippers-in-clojure/]].
 I should probably make a post/video about zippers to improve my own understanding of them, and re-implement my own editor functions in that process.
 
-#+begin_src clojure :tangle ./rss-saver.clj
+#+NAME: zipper-tools
+#+begin_src clojure
 ;; https://ravi.pckl.me/short/functional-xml-editing-using-zippers-in-clojure/
 (defn edit-nodes
   "Edit nodes from `zipper` that return `true` from the `matcher` predicate fn with the `editor` fn.
@@ -232,12 +253,14 @@ I should probably make a post/video about zippers to improve my own understandin
     (let [node (zip/node loc)
           {:keys [tag]} node]
       (= tag key))))
+
 #+end_src
 
-** entry nodes
+** entry-nodes
 Slurp the XML from the given URL. This returns a string which can be parsed with xml/parse-str. The feed itself has some extra data we don't need, so I want to turn it into a zipper and get a list of just the entry nodes, which are the posts in the blog.
 
-#+begin_src clojure :tangle ./rss-saver.clj
+#+NAME: entry-nodes
+#+begin_src clojure
 (defn feed-str->entries
   "Returns a sequence of parsed article entry nodes from an XML feed string."
   [s]
@@ -245,9 +268,10 @@ Slurp the XML from the given URL. This returns a string which can be parsed with
       (xml/parse-str {:namespace-aware false})
       zip/xml-zip
       (get-nodes (match-tag :entry))))
+
 #+end_src
 
-** node-transforms
+** entry-transforms
 The entire feed has been parsed down to a sequence of entries, each of which can be considered its own tree of nodes. Node transforms can now be built to work with each entry individually.
 
 *** normalize
@@ -255,7 +279,8 @@ Each entry can be 'flattened' down a bit, so I have a normalize function to help
 
 There are two special elements: links and the author content. Links have empty ~:content~ tags but need the ~:href~ from the attributes instead, so a cond is built to handle this. The author map is built separately, using the same map function as with the rest of the content. Then, the content and author maps are merged to form the flat, normalized map, which can be processed further.
 
-#+begin_src clojure :tangle ./rss-saver.clj
+#+NAME: normalize
+#+begin_src clojure
 (defn normalize-entry
   "Normalizes the entry node by flattening content into a map."
   [entry]
@@ -273,6 +298,7 @@ There are two special elements: links and the author content. Links have empty ~
    (apply merge (conj
                  (map f (remove #(= (:tag %) :author) content))
                  author-map))))
+
 #+end_src
 
 *** clean-html
@@ -282,7 +308,8 @@ This string cleaning method is as bit of a hack, but works fine and is meant to 
 
 The clean-html function is run on every entry's content string after normalization.
 
-#+begin_src clojure :tangle ./rss-saver.clj
+#+NAME: clean-html
+#+begin_src clojure
 (defn unwrap-img-from-figure
   "Returns the simplified `:img` node from its parent node."
   [node]
@@ -309,27 +336,31 @@ The clean-html function is run on every entry's content string after normalizati
         (edit-nodes (match-tag :figure) unwrap-img-from-figure)
         xml/emit-str
         (str/replace #"<\?xml[\w\W]+?>" ""))))
+
 #+end_src
 
-** hiccup
+** node-transforms
 The .edn file output will have a Hiccup data structure as its ~:post~ value. So, I need to build a set of functions that transform XML nodes (defrecords, which can be treated just as Clojure maps) into Hiccup-style vectors (eg. ~[:p {:display "inline-block"} "This is the content of a <p> tag.]~).
 
-*** Multi-method Dispatch
+*** dispatch
 I want to dispatch slightly different behaviour based on the element tag, so will use a multimethod. I like to build in a simple check in the dispatch function for lists of nodes. This way, I can handle recursive use of ~node->hiccup~ by building the ~:list~ method appropriately.
 
-#+begin_src clojure :tangle ./rss-saver.clj
+#+NAME: mm-dispatch
+#+begin_src clojure
 (defmulti node->hiccup
   (fn [node]
     (cond
       (map? node) (:tag node)
       (and (seqable? node) (not (string? node))) :list
       :else :string)))
+
 #+end_src
 
-*** Simple Cases
+*** simple-cases
 I don't need much special behaviour, so the default 'catch-all' method will do most of the work. A simple string case and div case are also given.
 
-#+begin_src clojure :tangle ./rss-saver.clj
+#+NAME: mm-simple-cases
+#+begin_src clojure
 (defmethod node->hiccup :string
   [node]
   (when-not (= (str/trim node) "") node))
@@ -338,12 +369,14 @@ I don't need much special behaviour, so the default 'catch-all' method will do m
 (defmethod node->hiccup :default
   [{:keys [tag attrs content]}]
   [tag attrs (node->hiccup content)])
+
 #+end_src
 
 *** List Case
 This case has a bit of machinery to it. Every time the list method is used, it means that a sequence of nodes have to be handled. To clean up the structure, I am building a flattening function that runs on each list. This flatten function will flatten everything down completely, except for hiccup vectors. I can't simply ~mapcat~ everything because it would destry the hiccup-style structure, as vectors can be flattened down to their elements. The result of selective-flatten is a flat list of strings and/or hiccup elements.
 
-#+begin_src clojure :tangle ./rss-saver.clj
+#+NAME: mm-list-case
+#+begin_src clojure
 (defn de-dupe
   "Remove only consecutive duplicate entries from the `list`."
   [list]
@@ -370,14 +403,16 @@ This case has a bit of machinery to it. Every time the list method is used, it m
        (remove nil?)
        de-dupe
        selective-flatten))
+
 #+end_src
 
-*** Re-grouping
-The flattened list of hiccup elements can then be processed and re-grouped on the basis of inline elements and string-br pairs. The html from hey.com blog posts has a lot of <br> tags and plain strings. I think that comes from the fact that it's html formatted to be viewed by email readers. However, for re-hosting to my own site, I want to use proper html structure, and so I want to group plain strings and <br> tags into <p> tags. I also need to make sure <ul>, <ol>, <li>, <em>, and <strong> tags are handled appropriately, so I have some grouping to do.
+*** re-grouping
+The flattened list of hiccup elements can then be processed and re-grouped on the basis of inline elements and string-br pairs. The html from hey.com blog posts has a lot of <br> tags and plain strings. I think that comes from the fact that it's html formatted to be viewed by email readers. However, for re-hosting to my own site, I want to use proper html structure, and so I want to group plain strings and <br> tags into <p> tags. I also need to make sure ~ul~, ~ol~, ~li~, ~em~, and ~strong~ tags are handled appropriately, so I have some grouping to do.
 
 I also de-dupe the list which can be helpful in eliminating extra newlines. There is a slight risk of this eliminating a deliberately duplicated sentence, but I'll just accept that as a potential weakness to this solution. I don't think I'll use that writing style at all anyway.
 
-#+begin_src clojure :tangle ./rss-saver.clj
+#+NAME: re-grouping
+#+begin_src clojure
 (defn inline-elem? [item] (when (#{:em :strong :a} (first item)) true))
 (defn inline? [item] (or (string? item) (inline-elem? item)))
 
@@ -395,6 +430,13 @@ I also de-dupe the list which can be helpful in eliminating extra newlines. Ther
          selective-flatten
          (remove #(= :br (first %))))))
 
+#+end_src
+
+** edn
+Put all of the node transforms and list manipulations together to build an entry->edn function.
+
+#+NAME: to-edn
+#+begin_src clojure
 (defn html-str->hiccup
   "Parses and converts an html string `s` into a Hiccup data structure."
   [s]
@@ -412,6 +454,7 @@ I also de-dupe the list which can be helpful in eliminating extra newlines. Ther
      :file-contents (assoc entry :post (->> entry :content
                                             clean-html
                                             html-str->hiccup))}))
+
 #+end_src
 
 ** html
@@ -419,7 +462,8 @@ Since I have the parsing machinery, it's trivial to build an html page export fu
 
 *NOTE:* I have a ~(str/replace #"</br>" "")~ hack in this fn because I cannot figure out why my Babashka script is emitting closing br tags. In the REPL it works fine... If I leave the closing tags there, my web browser interprets it as two <br> tags instead, making the page render incorrectly.
 
-#+begin_src clojure :tangle ./rss-saver.clj
+#+NAME: to-html
+#+begin_src clojure
 (defn readable-date
   "Format the date string `s` into a nicer form for display."
   [s]
@@ -456,6 +500,7 @@ Since I have the parsing machinery, it's trivial to build an html page export fu
               [:a {:href (:link entry)} [:h1 (:title entry)]]
               post]))
            (str/replace #"</br>" "")))))
+
 #+end_src
 
 ** CLI
@@ -470,7 +515,8 @@ The ~save!~ function can appear a bit confusing at first. It's just doing the fo
  5. Creating the list of new entries by filtering the current nodes against previous nodes
  6. For every new entry, save with the appropriate transform function, as determined by the opts map.
 
-#+begin_src clojure :tangle ./rss-saver.clj
+#+NAME: CLI
+#+begin_src clojure
 (def cli-options
   [["-h" "--help"]
    ["-u" "--url URL" "The URL of the RSS feed you want to save."]
@@ -539,20 +585,107 @@ The ~save!~ function can appear a bit confusing at first. It's just doing the fo
         (when (:clear opts) (clear! opts))
         (save! opts)))))
 
+#+end_src
+
+#+NAME: invoke
+#+begin_src clojure
 ;; apply -main to the args because I call this script with bb rss-saver.clj -u URL
 ;; if you run this script with clj -m, these two s-exprs should be commented out.
 (apply -main *command-line-args*)
 (shutdown-agents)
 #+end_src
 
+** script
+This section collects the named src blocks and tangles them to the rss-saver.clj script file.
+
+#+begin_src clojure :tangle ./rss-saver.clj
+<<shebang>>
+<<ns>>
+;;  Zipper Tools
+;; --------------
+
+<<zipper-tools>>
+;;  Entry Nodes
+;; -------------
+
+<<entry-nodes>>
+;;  Entry Transforms
+;; ------------------
+
+<<normalize>>
+<<clean-html>>
+;;  Node Transforms
+;; -----------------
+
+<<mm-dispatch>>
+<<mm-simple-cases>>
+<<mm-list-case>>
+<<re-grouping>>
+;;  entry->
+;; ---------
+
+<<to-edn>>
+<<to-html>>
+;;  CLI
+;; -----
+
+<<CLI>>
+<<invoke>>
+#+end_src
+
 * tests
+** ns
+#+NAME: test-ns
+#+begin_src clojure
+(ns rss-saver.main-test
+  (:require [clojure.string :as str]
+            [clojure.data.xml :as xml]
+            [clojure.java.io :as io]
+            [clojure.zip :as zip]
+            [clojure.java.shell :as sh :refer [sh]]
+            [clojure.tools.cli :as cli]
+            [clojure.test :as t :refer [deftest is]]
+            [hiccup2.core :refer [html]]))
+
+#+end_src
+
+** data
+Create some data for testing.
+
 #+begin_src clojure
 (def opts {:url "https://world.hey.com/adam.james/feed.atom"
            :dir "posts"
-           :format "md"})
+           :format "edn"})
 
 (def entries (feed-str->entries (slurp (:url opts))))
-#_(entry->markdown (nth entries 6))
-#_(save! opts)
 
+#+end_src
+
+** load-script
+Load the main script, manipulating the final s-exprs out to avoid invoking -main.
+
+#+NAME: load-script
+#+begin_src clojure
+(def script-str
+  (->> (slurp "rss-saver.clj")
+       (str/split-lines)
+       (drop 1)
+       (drop-last 4)
+       #_(remove #(str/starts-with? % ";"))
+       (apply str)))
+
+(spit "tmp.clj" script-str)
+(load-file "tmp.clj")
+#_(sh "rm" "tmp.clj")
+
+#_(ns-publics *ns*)
+#_(node->hiccup {:tag :list :attrs {} :content (list "a" "b" "c")})
+#+end_src
+
+** test-script
+Gathering the named src blocks to build the test script.
+
+#+begin_src clojure :tangle ./rss-saver-tests.clj
+<<test-ns>>
+<<load-script>>
 #+end_src

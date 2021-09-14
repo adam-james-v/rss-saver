@@ -60,10 +60,10 @@ Usage:
 I use this script with an automation using crontab on macOS. My crontab entry:
 
 ```sh
-0 12 * * * /usr/local/bin/bb /Users/adam/scripts/rss-saver.clj -u https://world.hey.com/adam.james/feed.atom
+0 12 * * * /usr/local/bin/bb /Users/adam/scripts/rss-saver/rss-saver.clj -u https://world.hey.com/adam.james/feed.atom -d /Users/adam/scripts/rss-saver/posts
 ```
 
-Which runs the script once at noon every day. It's default save directory is ./posts, so my articles are saved in `/Users/adam/scripts/rss-saver/posts`, but you can set the path to wherever you want using the `-d` or `--dir` options. I recommend using an absolute path to avoid confusion.
+Which runs the script once at noon every day. It's default save directory is ./posts, and cron runs the script from your home folder, so my articles are saved in `/Users/adam/scripts/rss-saver/posts`, but you can set the path to wherever you want using the `-d` or `--dir` options. I recommend using an absolute path to avoid confusion.
 
 ## Requirements
 RSS-Saver requires [Babashka](https://github.com/babashka/babashka). While writing this script, I was using *version 0.6.0*. The script uses the following libraries, which are bundled with the latest Babashka:
