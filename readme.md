@@ -20,7 +20,7 @@ This script is meant to be run automatically every night (or so) via a crontab e
 
 You can read the [design doc](./rss-saver.org#design) for a complete understanding of this project.
 
-You can check out an interactive blog post version of this project [here](https://adam-james-v.github.io/dev/rss-saver-web/) (WIP).
+You can check out an interactive blog post version of this project [here](https://adam-james-v.github.io/dev/rss-saver-web/).
 
 ## Installation
 If you already have the latest Babashka, all you have to do is grab the script from this repo:
@@ -79,6 +79,17 @@ RSS-Saver requires [Babashka](https://github.com/babashka/babashka). While writi
  - hiccup.core
 
 If you want to run things automatically, you need some mechanism to automate running scripts. I am using crontab.
+
+## Tests
+Since I've written this project in a literate style with org-mode, I can use Noweb and named code blocks to 'tangle' two versions of the script: **rss-saver.clj** which contains the code and the CLI but no tests, and **rss-saver-tests.clj** which contains the code and tests but no CLI.
+
+To run tests:
+
+```sh
+bb rss-saver-tests.clj
+```
+
+Tests use `clojure.test` and invoke all tests by calling `(t/run-tests)` at the bottom of the script.
 
 ## Status
 The script is complete and working as intended. Bugs will be fixed if I encounter them or if someone posts an issue. This is intended to be a *very* simple script with a small and specific scope, so new features won't be implemented. This project is *done* (Yay!).

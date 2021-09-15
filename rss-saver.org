@@ -37,7 +37,7 @@ This script is meant to be run automatically every night (or so) via a crontab e
 
 You can read the [design doc](./rss-saver.org#design) for a complete understanding of this project.
 
-You can check out an interactive blog post version of this project [here](https://adam-james-v.github.io/dev/rss-saver-web/) (WIP).
+You can check out an interactive blog post version of this project [here](https://adam-james-v.github.io/dev/rss-saver-web/).
 
 ## Installation
 If you already have the latest Babashka, all you have to do is grab the script from this repo:
@@ -96,6 +96,17 @@ RSS-Saver requires [Babashka](https://github.com/babashka/babashka). While writi
  - hiccup.core
 
 If you want to run things automatically, you need some mechanism to automate running scripts. I am using crontab.
+
+## Tests
+Since I've written this project in a literate style with org-mode, I can use Noweb and named code blocks to 'tangle' two versions of the script: **rss-saver.clj** which contains the code and the CLI but no tests, and **rss-saver-tests.clj** which contains the code and tests but no CLI.
+
+To run tests:
+
+```sh
+bb rss-saver-tests.clj
+```
+
+Tests use `clojure.test` and invoke all tests by calling `(t/run-tests)` at the bottom of the script.
 
 ## Status
 The script is complete and working as intended. Bugs will be fixed if I encounter them or if someone posts an issue. This is intended to be a *very* simple script with a small and specific scope, so new features won't be implemented. This project is *done* (Yay!).
@@ -367,10 +378,16 @@ I don't need much special behaviour, so the default 'catch-all' method will do m
   [node]
   (when-not (= (str/trim node) "") node))
 
+(defmethod node->hiccup :br [_] [:br])
 (defmethod node->hiccup :div [node] (node->hiccup (:content node)))
+
 (defmethod node->hiccup :default
   [{:keys [tag attrs content]}]
   [tag attrs (node->hiccup content)])
+
+(defmethod node->hiccup :img
+  [{:keys [tag attrs]}]
+  [tag (assoc attrs :style {:max-width 500})])
 
 #+end_src
 
@@ -636,6 +653,10 @@ This section collects the named src blocks and tangles them to the rss-saver.clj
 #+end_src
 
 * tests
+I'll just use noweb tangling to create a version of the script with tests built in. Then, invoke (run-tests) at the bottom of the script.
+
+This way, /rss-saver.clj/ and /rss-saver-tests.clj/ will both pull from the same sources and be independently runnable with ~bb~.
+
 ** ns
 #+NAME: test-ns
 #+begin_src clojure
@@ -651,37 +672,98 @@ This section collects the named src blocks and tangles them to the rss-saver.clj
 
 #+end_src
 
-** data
+** entries
 Create some data for testing.
 
+#+NAME: test-entries
 #+begin_src clojure
-(def opts {:url "https://world.hey.com/adam.james/feed.atom"
-           :dir "posts"
-           :format "edn"})
+;; this is a pull from my feed.atom at a point where 7 posts existed
+(def entries (feed-str->entries (slurp "sample-feed.atom")))
+(def raw-entry-content (:content (nth entries 4)))
+(def normalized-entry (normalize-entry (nth entries 4)))
 
-(def entries (feed-str->entries (slurp (:url opts))))
+(def normalized-entry-keys
+  #{:name :email :id
+    :published :updated
+    :link :title :content})
+
+(deftest entry-tests
+  (is (= 7 (count entries)))
+  (is (seq? raw-entry-content))
+  (is (= (type (:content normalized-entry)) java.lang.String))
+  (is (= normalized-entry-keys (into #{} (keys normalized-entry)))))
 
 #+end_src
 
-** load-script
-Load the main script, manipulating the final s-exprs out to avoid invoking -main.
-
-#+NAME: load-script
+** images
+#+NAME: test-images
 #+begin_src clojure
-(def script-str
-  (->> (slurp "rss-saver.clj")
-       (str/split-lines)
-       (drop 1)
-       (drop-last 4)
-       #_(remove #(str/starts-with? % ";"))
-       (apply str)))
+(defn get-figure-nodes
+  [s]
+  (let [s (-> s
+              (str/replace "<br>" "<br></br>")
+              (str/replace #"<img[\w\W]+?>" #(str %1 "</img>")))]
+    (-> s
+        (xml/parse-str {:namespace-aware false})
+        zip/xml-zip
+        (get-nodes (match-tag :figure)))))
 
-(spit "tmp.clj" script-str)
-(load-file "tmp.clj")
-#_(sh "rm" "tmp.clj")
+(def fig-img (-> (:content normalized-entry)
+                 get-figure-nodes
+                 first))
 
-#_(ns-publics *ns*)
-#_(node->hiccup {:tag :list :attrs {} :content (list "a" "b" "c")})
+(def unwrapped-img (unwrap-img-from-figure fig-img))
+                    
+(deftest image-tests
+  (is (= :figure (:tag fig-img)))
+  (is (= :img (:tag unwrapped-img))))
+
+#+end_src
+
+** node->hiccup
+#+NAME: test-node->hiccup
+#+begin_src clojure
+(def some-string "Hi there!")
+(def empty-string "  ")
+(def br {:tag :br :attrs {} :content '()})
+
+(def img-attrs {:src "https://www.fillmurray.com/300/200"
+                :alt "Bill Murray is great!"})
+(def img {:tag :img
+          :attrs img-attrs
+          :content '()})
+(def img-result [:img (merge img-attrs {:style {:max-width 500}})])
+
+(def div {:tag :div
+          :attrs {:a 1 :b 2}
+          :content (list some-string br img)})
+(def div-result (list "Hi there!" [:br] img-result))
+
+(def default (assoc div :tag :anything))
+(def default-result [:anything (:attrs div) div-result])
+
+(def duplicates ["a" "a" "a" "b" "a" "c" "c" "d" "d" "c"])
+(def nested (list (list (repeat 4 "a") (repeat 3 [:br]) "a" [:em "b"] "c")))
+
+(deftest node->hiccup-tests
+  (is (= (node->hiccup some-string) "Hi there!"))
+  (is (nil? (node->hiccup empty-string)))
+  (is (= (node->hiccup br) [:br]))
+  (is (= (node->hiccup img) img-result))
+  (is (= (node->hiccup div) div-result))
+  (is (= (node->hiccup default) default-result))
+  (is (= (de-dupe duplicates) ["a" "b" "a" "c" "d" "c"]))
+  (is (= (selective-flatten nested)
+         (list "a" "a" "a" "a" [:br] [:br] [:br] "a" [:em "b"] "c")))
+  (is (= (group-inline (selective-flatten nested))
+         (list [:p "a" "a" "a" "a"] [:p "a" [:em "b"] "c"]))))
+
+#+end_src
+
+** run-tests
+#+NAME: test-run
+#+begin_src clojure
+(t/run-tests)
 #+end_src
 
 ** test-script
@@ -689,5 +771,36 @@ Gathering the named src blocks to build the test script.
 
 #+begin_src clojure :tangle ./rss-saver-tests.clj
 <<test-ns>>
-<<load-script>>
+;;  Zipper Tools
+;; --------------
+
+<<zipper-tools>>
+;;  Entry Nodes
+;; -------------
+
+<<entry-nodes>>
+;;  Entry Transforms
+;; ------------------
+
+<<normalize>>
+<<clean-html>>
+;;  Node Transforms
+;; -----------------
+
+<<mm-dispatch>>
+<<mm-simple-cases>>
+<<mm-list-case>>
+<<re-grouping>>
+;;  entry->
+;; ---------
+
+<<to-edn>>
+<<to-html>>
+;;  Tests
+;; -------
+
+<<test-entries>>
+<<test-images>>
+<<test-node->hiccup>>
+<<test-run>>
 #+end_src

@@ -473,9 +473,11 @@ Since I have the parsing machinery, it's trivial to build an html page export fu
      post]))
 #+end_src
 
-Try it out and see the result!
+Try it out and see the result! Make an edit to the src below to force a re-evaluation of the code.
 
 #+begin_src clojure
-#_(-> (nth entries 4)
+@feed
+(def entries (feed-str->entries @feed))
+(-> (nth entries 4)
       entry->html)
 #+end_src

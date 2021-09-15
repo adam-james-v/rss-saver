@@ -134,10 +134,16 @@
   [node]
   (when-not (= (str/trim node) "") node))
 
+(defmethod node->hiccup :br [_] [:br])
 (defmethod node->hiccup :div [node] (node->hiccup (:content node)))
+
 (defmethod node->hiccup :default
   [{:keys [tag attrs content]}]
   [tag attrs (node->hiccup content)])
+
+(defmethod node->hiccup :img
+  [{:keys [tag attrs]}]
+  [tag (assoc attrs :style {:max-width 500})])
 
 (defn de-dupe
   "Remove only consecutive duplicate entries from the `list`."
