@@ -37,6 +37,8 @@ This script is meant to be run automatically every night (or so) via a crontab e
 
 You can read the [design doc](./rss-saver.org#design) for a complete understanding of this project.
 
+You can check out an interactive blog post version of this project [here](https://adam-james-v.github.io/dev/rss-saver-web/) (WIP).
+
 ## Installation
 If you already have the latest Babashka, all you have to do is grab the script from this repo:
 

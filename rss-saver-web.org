@@ -1,4 +1,4 @@
-* RSS-saver-web
+* RSS-saver
 #+Title: RSS-saver-web
 #+AUTHOR: adam-james
 #+STARTUP: overview
@@ -7,25 +7,67 @@
 #+HTML_DOCTYPE: html5
 #+OPTIONS: toc:2 num:nil html-style:nil html-postamble:nil html-preamble:nil html5-fancy:t
 
+#+begin_example
+<div style="white-space:pre-wrap;font-family:monospace;">
+ ______________<br>
+|[]            |<br>
+|  __________  |<br>
+|  |  RSS-  |  |<br>
+|  | saver  |  |<br>
+|  |________|  |<br>
+|   ________   |<br>
+|   [ [ ]  ]   |<br>
+\___[_[_]__]___|
+</div>
+#+end_example
+
 A simple Clojure (Babashka) script to save world@hey.com blog posts locally.
 
-I use hey.com's blog feature to write blog posts to help me clarify and improve my own thinking about life, design, and programming. It's a cool feature of a nice email service, but I worry that I may not be able to retrieve my posts in the event of service shutdown, or if I move on to another email provider in the future.
+I use [[https://www.hey.com/world/][Hey's blog feature]] to write blog posts. I do it in the hopes that each post helps me clarify and improve my own thinking about life, design, and programming. It's a cool feature, but I worry that I may not be able to retrieve my posts in the event of service shutdown, or if I move on to another email provider in the future.
 
-This script is meant to be run automatically every night (or so) via a crontab entry. It downloads the feed.atom xml file from the provided URL, checks for any changes from the previous download, and saves new entries.
+The script version of this project exists at [[https://github.com/adam-james-v/rss-saver]] and is a much more realistic way to use this code.
 
-* deps :noexport:
+** About This Post
+This post is a showcase of the functionality of the script. It is not meant to be a real interface to the script. It's just a fun way to show off some code!
+
+As you read through the post, you'll encounter src blocks with editable Clojurescript code. Every edit causes the src block to re-evaluate, so I suggest keeping the code small and simple for any given block.
+
+In the script version of this code, I don't run any of the functions until the ~-main~ function is called, but that's not necessarily the most instructive way to show code in post form. So, I generally follow this pattern:
+
+ - explanation of a need and implementation idea(s)
+ - implementing the necessary functions in a src block
+ - a 'playground' src block with commented code that the reader can uncomment to observe function behaviour.
+
+Using this pattern, I think, will make for an informative post. I hope you like it.
+
+** deps
+For reference, these are the dependencies compiled into this page. Dependencies for the script are all built into the /v0.6.0/ Babashka binary.
+
 #+begin_src clojure
 {:deps
  {org.clojure/data.xml {:mvn/version "0.2.0-alpha6"}
   cljs-ajax/cljs-ajax {:mvn/version "0.8.4"}}}
-
 #+end_src
 
-* main
-** ns
-As part of the design criteria, I want this to work without pulling any new libraries from outside of the babashka tool. This means sticking with clojure.data.xml even though other libraries might be a little more straight forward. I can build a zipper editor easily enough so it's not a problem.
+* Design
+The full design doc can be found [[https://github.com/adam-james-v/rss-saver/blob/main/rss-saver.org#design][here]].
 
-I'll want to run it as a CLI, so I'll need tools.cli as well.
+The high-level view of what this code does is very simple:
+
+ 1. Grab the feed XML from the given URL
+ 2. Parse the URL and get nodes that correspond to posts (entries)
+ 3. Transform each entry node into a Clojure map with a Hiccup data structure
+ 4. Save and/or Render the document
+
+* Code
+I love Clojure and Clojurescript. If you haven't already noticed it, I'm using Clojure for the script version of this project, which works almost perfectly in this Clojurescript context, too. The only code that is Clojurescript specific are related to the http GET request and the rendering function that uses Reagent to render things into this document's DOM directly. A CLI interface is omitted in the browser context as well, for obvious reasons.
+
+Anyway, let's get started by setting up a namespace.
+
+** ns
+As part of the design criteria, I want this to work without pulling any new libraries from outside of the babashka tool. This means sticking with clojure.data.xml even though other libraries might be a little more straight forward.
+
+For this web example, I'm also using ~cljs-ajax~ to perform a GET to grab the example *feed.atom* XML.
 
 #+NAME: ns
 #+begin_src clojure
@@ -33,25 +75,40 @@ I'll want to run it as a CLI, so I'll need tools.cli as well.
   (:require [clojure.string :as str]
             [clojure.data.xml :as xml]
             [clojure.zip :as zip]
-            [ajax.core :refer [GET POST]]))
-
+            [ajax.core :refer [GET]]))
 #+end_src
 
-** get
-Use cljs-ajax to get the feed XML and store in in an atom. Defonce is used to prevent the feed atom from being overwritten.
+** Getting the Feed
+Use ~cljs-ajax~ to get the feed XML and store in in an atom. Defonce is used to prevent the feed atom from being overwritten if/when the reader edits the src block.
 
-This should be a read-only src block
+I spent some time trying to get fetch to work with cross-origin URLs, so that the reader could paste different hey.com URLs into the code, but failed. I am honestly very confused by what I need to do. Everything I look up talking about CORS headers indicates something happening server side, but this is a client only page trying to make a GET request to an external URL.
+
+If anyone knows how to set this up to work with cross-origin URLs, please create an issue or discussion on [[https://github.com/adam-james-v/rss-saver]] or Tweet me [[https://twitter.com/RustyVermeer][@RustyVermeer]].
+
+Instead, I have a copy of my *feed.atom* uploaded with the rest of this page which I will use as if it were the real URL.
 
 #+begin_src clojure
-(defonce feed (atom ""))
+(defonce feed (atom "not fetched."))
 (defn fetch [] (GET "/feed.atom" {:handler #(reset! feed %)}))
 (fetch)
-(def feed-str (str @feed))
 #+end_src
 
-** zipper-tools
-I want to get better with zippers, but for now, I can use the examples provided by [[https://ravi.pckl.me/short/functional-xml-editing-using-zippers-in-clojure/]].
-I should probably make a post/video about zippers to improve my own understanding of them, and re-implement my own editor functions in that process.
+Uncomment the code below to confirm that the feed is stored in the atom as an XML string. The ~@~ in front of the ~feed~ symbol is syntax for dereferencing an atom. It is equivalent to ~(deref feed)~ and is required to access the value stored inside the atom.
+
+#+begin_src clojure
+;;@feed
+#+end_src
+
+** Zippers and Node Editors
+I'll admit up front that I don't fully grasp the idea of zippers yet. I have to study them a bit further and fiddle around with my own implementations, but I know enough to still make use of them. I suggest searching around and reading a few tutorials and documentation pages to start understanding. I found [[https://grishaev.me/en/clojure-zippers/][this]] article by Ivan Grishaev to be quite thorough and informative.
+
+A zipper is a data structure that you can use to traverse, search, and modify tree data structures. They are valuable in Clojure because they offer an immutable way to work with trees. To build a zipper, you do need to specify what a branch and a child look like. Luckily, I don't have to do that manually for XML as ~clojure.zip~ provides the function ~xml-zip~ to do the heavy lifting.
+
+I want to become more confident with zippers, but for now, I can use the examples provided by [[https://ravi.pckl.me/short/functional-xml-editing-using-zippers-in-clojure/]] to create some tree editing tools: ~edit-nodes~, ~remove-nodes~, and ~get-nodes~.
+
+Each of these functions takes a zipper and a matcher function, which is a predicate function checking each node for some criteria. The ~edit-nodes~ function also takes an ~editor~ function which takes in the node and returns a node modified in some way. With the XML zipper, each node is a Clojure /record/, technically, but those can be treated just like a map, which means they have keys and vals.
+
+In my case, I'll be editing nodes that have keys: ~:tag~, ~:attrs~, and ~:content~, where the tag value is a keyword, attrs is a map of attrs (can be empty), and content is a list that can contain strings and other nodes, or be empty.
 
 #+NAME: zipper-tools
 #+begin_src clojure
@@ -83,7 +140,11 @@ I should probably make a post/video about zippers to improve my own understandin
         (let [new-loc (zip/remove loc)]
           (recur (zip/next new-loc)))
         (recur (zip/next loc))))))
+#+end_src
 
+The ~get-nodes~ function doesn't return the tree like the above functions. Instead it returns a sequence of nodes that are ~true~ given the matcher function. This is useful for situations where you want to keep certain nodes but don't need to save the entire tree. I'll use this function to grab each post from the feed.
+
+#+begin_src clojure
 (defn get-nodes
   "Returns a list of nodes from `zipper` that return `true` from the `matcher` predicate fn.
   The `matcher` fn expects a zipper location, `loc`, and returns `true` (or some value) or `false` (or nil)."
@@ -95,19 +156,24 @@ I should probably make a post/video about zippers to improve my own understandin
       (if (matcher loc)
         (recur (zip/next loc) (conj acc (zip/node loc)))
         (recur (zip/next loc) acc)))))
+#+end_src
 
+In this code, I am only ever matching based on the key found in a node's ~:tag~ entry, so I can make a little helper function to construct key matchers.
+
+*NOTE:* The ~clojure.data.xml~ /v0.2.0alpha-6/ is needed for cljs compatibility. Unfortunately, behaviour is not exactly the same between the two implementations. In particular, the ~{:namespace-aware false}~ option has /no effect/ in clojurescript. Therefore, the match-tag implementation presented here is different than in my script. Here, I use ~xml/qname~ to strip the namespace away from the tag so that the equality actually works as expected.
+
+#+begin_src clojure
 (defn match-tag
   "Returns a `matcher` fn that matches any node containing the specified `key` as its `:tag` value."
   [key]
   (fn [loc]
     (let [node (zip/node loc)
           {:keys [tag]} node]
-      (= tag key))))
-
+      (= (xml/qname tag) key))))
 #+end_src
 
-** entry-nodes
-Slurp the XML from the given URL. This returns a string which can be parsed with xml/parse-str. The feed itself has some extra data we don't need, so I want to turn it into a zipper and get a list of just the entry nodes, which are the posts in the blog.
+** Grabbing Posts, aka Entry Nodes
+When I was first building this project, I pulled the XML string into the REPL, parsed it, and started poking around the tree to see what nodes were available to me. I discovered that each post corresponded to a node that had an ~:entry~ tag. So, To grab each post, all I need to do is get every node that matches with an ~:entry~ tag.
 
 #+NAME: entry-nodes
 #+begin_src clojure
@@ -115,48 +181,82 @@ Slurp the XML from the given URL. This returns a string which can be parsed with
   "Returns a sequence of parsed article entry nodes from an XML feed string."
   [s]
   (-> s
-      (xml/parse-str {:namespace-aware false})
+      xml/parse-str
       zip/xml-zip
       (get-nodes (match-tag :entry))))
-
 #+end_src
 
-** entry-transforms
-The entire feed has been parsed down to a sequence of entries, each of which can be considered its own tree of nodes. Node transforms can now be built to work with each entry individually.
+Have a look at what an entry node is below by uncommenting the last line in the src block.
 
-*** normalize
-Each entry can be 'flattened' down a bit, so I have a normalize function to help with that. Content within any node is a sequence of strings or other nodes. At this stage, all strings within the entry's content are empty or newline characters and so can be filtered out.
+#+begin_src clojure
+(def entries (feed-str->entries @feed))
 
-There are two special elements: links and the author content. Links have empty ~:content~ tags but need the ~:href~ from the attributes instead, so a cond is built to handle this. The author map is built separately, using the same map function as with the rest of the content. Then, the content and author maps are merged to form the flat, normalized map, which can be processed further.
+;;(into {} (nth entries 6))
+#+end_src
+
+Now I've handled grabbing the XML string, parsing it, and pulling out a list of each post. Let's move on to manipulating this data into something more suitable to my purposes.
+
+** Entry Node Transforms
+Now that I've got a list containing the data for each post, I can transform them into a structure that's more suitable for my needs.
+
+*** Normalize
+Each entry can be flattened down, so I have a normalize function to help with that.
+
+Content within any node is a sequence that can contain either strings or other nodes, or be empty. At this stage, all strings within the entry's content are empty or newline characters. The newline characters arguably contain data regarding the document's structure, but I have some logic later on for grouping strings and ~<br>~ tags that cover this issue, so I can comfortably filter out these strings.
+
+There are two special elements: /links/ and the /author/. Links have empty ~:content~ tags but need the ~:href~ from the attributes instead, so a cond is built to handle this. The author map is built separately, using the same map function as with the rest of the content. Then, the content and author maps are merged to form the flat, normalized map, which can be processed further.
+
+The ~:content~ of each normalized node ends up being an HTML string, which is great as we can use the existing XML node editing machinery to further parse and transform each entry into a Hiccup data strucure.
 
 #+NAME: normalize
 #+begin_src clojure
+(defn strip-namespaces
+  [node]
+  (update node :tag xml/qname))
+
 (defn normalize-entry
   "Normalizes the entry node by flattening content into a map."
   [entry]
-  (let [content (filter map? (:content entry))
+  (let [content (map strip-namespaces
+                     (filter map? (:content entry)))
         f (fn [{:keys [tag content] :as node}]
             (let [val (cond (= tag :link) (get-in node [:attrs :href])
                             :else (first content))]
-                {tag val}))
+              {(xml/qname tag) val}))
         author-map (->> content
                         (filter #(= (:tag %) :author))
                         first :content
                         (filter map?)
                         (map f)
                         (apply merge))]
-   (apply merge (conj
-                 (map f (remove #(= (:tag %) :author) content))
-                 author-map))))
-
+    (apply merge (conj
+                  (map f (remove #(= (:tag %) :author) content))
+                  author-map))))
 #+end_src
 
-*** clean-html
-Since no external libraries are used, I am manipulating XML strings slightly to keep the XML parser from complaining about html tags that don't have terminating tags, like <br> and <img>. At the same time, I unwrap image tags from figures, which is how Hey.com wraps images in entries.
+Let's check that the normalization works properly. Run it on one of the entries and see if its structure is flattened.
+
+#+begin_src clojure
+(def normalized-entry-example (normalize-entry (nth entries 6)))
+(def normalized-entry-keys
+  #{:name :email :id
+    :published :updated
+    :link :title :content})
+
+(= normalized-entry-keys
+   (into #{} (keys normalized-entry-example)))
+
+;;normalized-entry-example
+#+end_src
+
+*** Clean Html
+Since no external libraries are used, I am manipulating HTML strings slightly to keep the XML parser from complaining about html tags that don't have terminating tags, like ~<br>~ and ~<img>~.
+
+I also unwrap image tags from figures, which is how /world.hey.com/ wraps images in entries. I think it does that to display nicely inside email clients, but I'm not certain. Whatever the reason, I want to modify each ~:figure~ node by removing them and replacing each with their child ~:img~ node.
 
 This string cleaning method is as bit of a hack, but works fine and is meant to allow ~clojure.data.xml~ to continue being used for further parsing/transforming steps later on in the script.
 
-The clean-html function is run on every entry's content string after normalization.
+The ~clean-html~ function is run on every entry's content string after normalization.
 
 #+NAME: clean-html
 #+begin_src clojure
@@ -164,36 +264,57 @@ The clean-html function is run on every entry's content string after normalizati
   "Returns the simplified `:img` node from its parent node."
   [node]
   (let [img-node (-> node
-                 zip/xml-zip
-                 (get-nodes (match-tag :img))
-                 first)
+                     zip/xml-zip
+                     (get-nodes (match-tag :img))
+                     first)
         new-attrs (-> img-node :attrs
                       (dissoc :srcset :decoding :loading))]
-    (assoc img-node :attrs new-attrs)))
+    (-> img-node
+        (assoc :attrs new-attrs)
+        (assoc :content nil))))
 
 (defn clean-html
   "Cleans up the html string `s`.
-  The string is well-formed html, but is coerced into XML conforming form by closing <br> and <img> tags.
+  The string is well-formed html, but is coerced into XML conforming form by closing `br` and `img` tags.
   The emitted XML string has the <\\?xml...> tag stripped.
   This cleaning is done so that clojure.data.xml can continue to be used for parsing in later stages."
   [s]
   (let [s (-> s
-              (str/replace "<br>" "<br></br>")
-              (str/replace #"<img[\w\W]+?>" #(str %1 "</img>")))]
+              (str/replace "&lt;br&gt;" "&lt;br&gt;&lt;/br&gt;")
+              (str/replace #"&lt;img[\w\W]+?&gt;" #(str %1 "&lt;/img&gt;")))]
     (-> s
         (xml/parse-str {:namespace-aware false})
         zip/xml-zip
         (edit-nodes (match-tag :figure) unwrap-img-from-figure)
         xml/emit-str
         (str/replace #"<\?xml[\w\W]+?>" ""))))
-
 #+end_src
 
-** node-transforms
-The .edn file output will have a Hiccup data structure as its ~:post~ value. So, I need to build a set of functions that transform XML nodes (defrecords, which can be treated just as Clojure maps) into Hiccup-style vectors (eg. ~[:p {:display "inline-block"} "This is the content of a <p> tag.]~).
+Now let's try clean one of the entry's html strings.
 
-*** dispatch
-I want to dispatch slightly different behaviour based on the element tag, so will use a multimethod. I like to build in a simple check in the dispatch function for lists of nodes. This way, I can handle recursive use of ~node->hiccup~ by building the ~:list~ method appropriately.
+#+begin_src clojure
+(def cleaned-html-example
+  (-> (nth entries 4)
+      normalize-entry
+      :content
+      clean-html))
+
+;;cleaned-html-example
+#+end_src
+
+*NOTE:* There's a design flaw in my approach here. It's minor as this is a simple script that can run over the posts quickly and easily, and extreme optimization is unnecessary for this simple script, but it's important to acknowledge limitations and flaws in design.
+
+The ~clean-html~ function takes an html string, parses it, transforms it, and emits a string again. My immediate next steps will once again take the string and parse it, causing extra emit/parse steps. This was here because I originally took the html string emitted from ~clean-html~ as the final html output. I later decided to create a cleaner Hiccup structure and use that as the export basis. I've left this design flaw in here as an example of the reality of software development: sometimes the flaws don't show up as errors at all. The flaws are sometimes in the design, not the implementation.
+
+** Final Transformation of Nodes
+My script's design calls for a /.edn/ export, which is a map containing all of the data normalized and in a useful format. The .edn file output will have a Hiccup data structure as its ~:post~ key value.
+
+I need to build a set of functions that transform normalized entry nodes (defrecords, which can be treated just as Clojure maps) into Hiccup-style vectors (eg. ~[:p {:display "inline-block"} "This is the content of a p tag.]~).
+
+I'll use a multimethod to help produce the correct output based on the html tag of the nodes. Every multimethod needs a function that specifies the dispatch behaviour. To understand multimethods, I suggest reading [[https://clojure.org/reference/multimethods][this article]] to start.
+
+*** Dispatch
+I like to build in a simple check in the dispatch function for lists of nodes. This way, I can handle recursive use of ~node->hiccup~ by building the ~:list~ method appropriately.
 
 #+NAME: mm-dispatch
 #+begin_src clojure
@@ -203,11 +324,10 @@ I want to dispatch slightly different behaviour based on the element tag, so wil
       (map? node) (:tag node)
       (and (seqable? node) (not (string? node))) :list
       :else :string)))
-
 #+end_src
 
-*** simple-cases
-I don't need much special behaviour, so the default 'catch-all' method will do most of the work. A simple string case and div case are also given.
+*** Default and Simple Cases
+I don't need much special behaviour, so the ~:default~ dispatch acts as a 'catch-all' method and does most of the work. A simple string case and ~:div~ case are also given.
 
 #+NAME: mm-simple-cases
 #+begin_src clojure
@@ -215,15 +335,27 @@ I don't need much special behaviour, so the default 'catch-all' method will do m
   [node]
   (when-not (= (str/trim node) "") node))
 
+(defmethod node->hiccup :br [_] [:br])
 (defmethod node->hiccup :div [node] (node->hiccup (:content node)))
 (defmethod node->hiccup :default
   [{:keys [tag attrs content]}]
   [tag attrs (node->hiccup content)])
 
+(defmethod node->hiccup :img
+  [{:keys [tag attrs]}]
+  [tag (assoc attrs :style {:max-width 500})])
 #+end_src
 
 *** List Case
-This case has a bit of machinery to it. Every time the list method is used, it means that a sequence of nodes have to be handled. To clean up the structure, I am building a flattening function that runs on each list. This flatten function will flatten everything down completely, except for hiccup vectors. I can't simply ~mapcat~ everything because it would destry the hiccup-style structure, as vectors can be flattened down to their elements. The result of selective-flatten is a flat list of strings and/or hiccup elements.
+This case has a bit of machinery to it. Every time the list method is used, it means that a sequence of nodes have to be handled. To clean up the structure, I am building a flattening function that runs on each list. This flatten function will flatten everything down completely, except for hiccup vectors.
+
+I cannot simply ~mapcat~ everything because it would destry the hiccup-style structure, as vectors can be flattened down to their elements.
+
+The result of ~selective-flatten~ is a flat list of strings and/or hiccup elements.
+
+I also take this opportunity to de-duplicate the list. This has the effect of removing extra newlines and linebreaks.
+
+*NOTE:* One weakness that I recognize yet am willing to accept is that ~de-dupe~ may eliminate duplicates that a writer intended for stylistic reasons. Sometimes repetition is a nice way to emphasize a point, and if the repetition is the same paragraph several times, the duplicates will be removed.
 
 #+NAME: mm-list-case
 #+begin_src clojure
@@ -241,8 +373,8 @@ This case has a bit of machinery to it. Every time the list method is used, it m
      (let [item (first l)
            xacc (if (or (string? item)
                         (and (vector? item) (keyword? (first item))))
-                 (conj acc item)
-                 (into [] (concat acc (selective-flatten item))))]
+                  (conj acc item)
+                  (into [] (concat acc (selective-flatten item))))]
        (recur xacc (rest l)))
      (apply list acc))))
 
@@ -253,11 +385,12 @@ This case has a bit of machinery to it. Every time the list method is used, it m
        (remove nil?)
        de-dupe
        selective-flatten))
-
 #+end_src
 
 *** re-grouping
-The flattened list of hiccup elements can then be processed and re-grouped on the basis of inline elements and string-br pairs. The html from hey.com blog posts has a lot of <br> tags and plain strings. I think that comes from the fact that it's html formatted to be viewed by email readers. However, for re-hosting to my own site, I want to use proper html structure, and so I want to group plain strings and <br> tags into <p> tags. I also need to make sure ~ul~, ~ol~, ~li~, ~em~, and ~strong~ tags are handled appropriately, so I have some grouping to do.
+The flattened list of hiccup elements can then be processed and re-grouped on the basis of inline elements and string-br pairs. The html from hey.com blog posts has a lot of <br> tags and plain strings. I think that comes from the fact that it's html formatted to be viewed by email readers.
+
+For re-hosting to my own site, I want to use proper html structure, which means I need to group plain strings and <br> tags into <p> tags. I also need to make sure ~ul~, ~ol~, ~li~, ~em~, and ~strong~ tags are handled appropriately. This all means I have some grouping to do.
 
 I also de-dupe the list which can be helpful in eliminating extra newlines. There is a slight risk of this eliminating a deliberately duplicated sentence, but I'll just accept that as a potential weakness to this solution. I don't think I'll use that writing style at all anyway.
 
@@ -279,11 +412,10 @@ I also de-dupe the list which can be helpful in eliminating extra newlines. Ther
          (map f)
          selective-flatten
          (remove #(= :br (first %))))))
-
 #+end_src
 
-** edn
-Put all of the node transforms and list manipulations together to build an entry->edn function.
+** Turn Entry Nodes into edn
+Finally I can put all of the node transforms and list manipulations together to build a function that turns the html string into a hiccup structure. Then I can also create the ~entry->edn~ transform needed to produce the correct output for my script.
 
 #+NAME: to-edn
 #+begin_src clojure
@@ -304,13 +436,12 @@ Put all of the node transforms and list manipulations together to build an entry
      :file-contents (assoc entry :post (->> entry :content
                                             clean-html
                                             html-str->hiccup))}))
-
 #+end_src
 
-** html :noexport:
+** Exporting html
 Since I have the parsing machinery, it's trivial to build an html page export function now. I simply have to make a document structure with Hiccup and place the content from the entry inside.
 
-*NOTE:* I have a ~(str/replace #"</br>" "")~ hack in this fn because I cannot figure out why my Babashka script is emitting closing br tags. In the REPL it works fine... If I leave the closing tags there, my web browser interprets it as two <br> tags instead, making the page render incorrectly.
+*NOTE:* This is a modified function to render in the browser. See [[https://github.com/adam-james-v/rss-saver/blob/main/rss-saver.org#html][the script's html section]] for the original implementation using ~hiccup.core/html~ to compile the Hiccup structure into an html document string.
 
 #+NAME: to-html
 #+begin_src clojure
@@ -330,31 +461,21 @@ Since I have the parsing machinery, it's trivial to build an html page export fu
                                     :margin-bottom "2px"}}
                      [:strong label] s])
         post (->> entry :content
-                   clean-html
-                   html-str->hiccup)]
-    (assoc entry :file-contents
-           (->
-            (str
-            "<!DOCTYPE html>\n"
-            (html
-             {:mode :html}
-             [:head
-              [:meta {:charset "utf-8"}]
-              [:title (:title entry)]]
-             [:body
-              [:div {:class "post-info"}
-               (info-span "Author: " (:name entry))
-               (info-span "Email: " (:email entry))
-               (info-span "Published: " (readable-date (:published entry)))
-               (info-span "Updated: " (readable-date (:updated entry)))]
-              [:a {:href (:link entry)} [:h1 (:title entry)]]
-              post]))
-           (str/replace #"</br>" "")))))
+                  clean-html
+                  html-str->hiccup)]
+    [:div
+     [:div {:class "post-info"}
+      (info-span "Author: " (:name entry))
+      (info-span "Email: " (:email entry))
+      (info-span "Published: " (readable-date (:published entry)))
+      (info-span "Updated: " (readable-date (:updated entry)))]
+     [:a {:href (:link entry)} [:h1 (:title entry)]]
+     post]))
+#+end_src
 
-(def opts {:url "https://world.hey.com/adam.james/feed.atom"
-           :dir "posts"
-           :format "edn"})
+Try it out and see the result!
 
-(def entries (feed-str->entries (slurp (:url opts))))
-
+#+begin_src clojure
+#_(-> (nth entries 4)
+      entry->html)
 #+end_src
